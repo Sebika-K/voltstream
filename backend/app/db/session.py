@@ -42,8 +42,9 @@ async_session_maker = async_sessionmaker(bind=engine, expire_on_commit=False, cl
 async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
     """FastAPI dependency yielding a request-scoped ``AsyncSession``.
 
-    Not used by any endpoint yet (no application tables exist), but wired up now so
-    later features can depend on it without touching this module.
+    First used by the battery registration endpoint (Roadmap 1.6); every
+    later database-backed endpoint depends on this same function rather than
+    constructing its own session.
     """
     async with async_session_maker() as session:
         yield session

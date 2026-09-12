@@ -1,6 +1,17 @@
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# The app's database engine (app/db/session.py) is a single module-level
+# object, created once and reused for the whole process -- exactly like it
+# will be in the real running app. pytest-asyncio's default gives every test
+# function its own fresh event loop, but an async engine's connection pool is
+# tied to whichever loop was running when it opened a connection -- so a
+# pooled connection from test 1's loop breaks the moment test 2 starts on a
+# new one ("attached to a different loop"). Pinning both loop scopes to
+# "session" keeps one event loop for the whole run, matching how the engine
+# is actually used.
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
 
 [tool.ruff]
 line-length = 100
