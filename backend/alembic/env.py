@@ -22,6 +22,11 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from app.core.config import get_settings
 from app.db.base import Base
 
+# Importing the models package registers every ORM model's table onto
+# Base.metadata -- without this import, target_metadata below would be
+# empty and autogenerate would never see `batteries` or `telemetry`.
+import app.models  # noqa: F401,E402
+
 # Alembic Config object, providing access to values within alembic.ini.
 config = context.config
 
