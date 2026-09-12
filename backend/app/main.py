@@ -9,6 +9,7 @@ from fastapi import FastAPI
 
 from app.api.batteries import router as batteries_router
 from app.api.system import router as system_router
+from app.api.telemetry import router as telemetry_router
 from app.core.config import get_settings
 from app.core.errors import APIError, api_error_handler
 
@@ -18,6 +19,7 @@ app = FastAPI(title=settings.APP_NAME)
 
 app.include_router(system_router)
 app.include_router(batteries_router)
+app.include_router(telemetry_router)
 
 # Registered once, here, so every product endpoint that raises APIError gets
 # the Contract's {"error": {"code", "message"}} envelope automatically -- see

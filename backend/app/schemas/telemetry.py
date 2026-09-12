@@ -76,3 +76,18 @@ class TelemetryEvent(BaseModel):
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("timestamp must include timezone information")
         return value
+
+
+class TelemetryIngestResponse(BaseModel):
+    """What `POST /api/v1/telemetry` sends back on success.
+
+    The Contract doesn't specify a response body for single ingestion (only
+    the batch endpoint's `{"received", "inserted", "duplicates"}` shape is
+    spelled out) -- this is a small, reasonable acknowledgment of our own: it
+    confirms which event was accepted without repeating the whole payload
+    back, since the caller already has that.
+    """
+
+    event_id: UUID
+    battery_id: str
+    status: Literal["accepted"] = "accepted"
