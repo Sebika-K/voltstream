@@ -6,12 +6,8 @@ project checkpoint" -- the test that matters most here is simply: does an
 event generated the way the simulator would generate one actually end up as
 a row in the `telemetry` table.
 
-Deliberately NOT tested here: sending the same event twice. Roadmap 1.7
-doesn't include idempotent duplicate handling (that's 1.8) -- today, a
-duplicate `event_id` raises a database integrity error rather than failing
-gracefully. That gap is real and is closed in the next step, not hidden by
-avoiding the test; there's just nothing meaningful to assert about it yet
-beyond "this isn't handled," which the next step's tests will cover properly.
+Duplicate `event_id` delivery (Roadmap 1.8's idempotency guarantee) is
+covered separately in `test_telemetry_idempotency.py`, not here.
 """
 
 from __future__ import annotations
