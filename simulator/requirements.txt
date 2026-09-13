@@ -1,0 +1,8 @@
+# Simulator dependencies (Roadmap 1.3 + 1.10; TDD section 7's stated stack: Python,
+# asyncio (stdlib, no install needed), httpx).
+httpx>=0.27,<1.0
+
+# Test tooling. Simulator tests need no async plugin (unlike backend/pyproject.toml's
+# pytest-asyncio setup) -- they wrap async code in asyncio.run() from plain sync test
+# functions, the same pattern test_fleet.py already used before this file existed.
+pytest>=8.0
