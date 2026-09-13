@@ -91,3 +91,37 @@ class TelemetryIngestResponse(BaseModel):
     event_id: UUID
     battery_id: str
     status: Literal["accepted"] = "accepted"
+
+
+class TelemetryBatchRequest(BaseModel):
+    """Request body for `POST /api/v1/telemetry/batch` (Contract section 16).
+
+    A batch is just "several `TelemetryEvent`s at once" -- reusing the exact same
+    per-event validation means the batch endpoint enforces every rule the single
+    endpoint does, for free. If any one event in the list fails that validation,
+    FastAPI rejects the *entire* request with 422 before this model is even fully
+    built, which is exactly the Contract's "structurally invalid -> whole request
+    422, nothing persisted" rule -- no extra code needed to get that behavior.
+
+    The maximum batch size (Contract: 1,000) is deliberately NOT enforced here as a
+    Pydantic constraint: exceeding it is a payload-size problem, not a malformed-data
+    problem, and the Contract lists a distinct status code (413) for that case. A
+    schema-level max would collapse both cases into the same 422 response, so that
+    size check happens explicitly in the endpoint instead (see app/api/telemetry.py).
+    """
+
+    events: list[TelemetryEvent] = Field(..., min_length=1)
+
+
+class TelemetryBatchResponse(BaseModel):
+    """What `POST /api/v1/telemetry/batch` sends back (Contract section 16, exact shape).
+
+    `received` always equals `inserted + duplicates` -- every event in the batch
+    lands in exactly one of those two buckets. "Duplicate" covers both an event_id
+    repeated more than once inside this same request, and one that was already
+    stored from some earlier request -- the Contract treats both the same way.
+    """
+
+    received: int
+    inserted: int
+    duplicates: int
