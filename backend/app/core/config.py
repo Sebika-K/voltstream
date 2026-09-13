@@ -47,6 +47,12 @@ class Settings(BaseSettings):
     # Bound on how long a single readiness probe may take before it is treated as a failure.
     DB_READY_TIMEOUT_SECONDS: float = 2.0
 
+    # Roadmap 1.9 / Contract sections 16 + 54: the hard ceiling on how many events a
+    # single POST /api/v1/telemetry/batch request may contain. Exceeding it is a
+    # payload-size problem (413), not a malformed-data problem (422) -- see
+    # app/api/telemetry.py for where this gets enforced.
+    MAX_BATCH_SIZE: int = 1000
+
 
 @lru_cache
 def get_settings() -> Settings:
