@@ -3,6 +3,12 @@ import { useBatteryDetail } from '../hooks/useBatteryDetail'
 import { useBatteryTelemetryHistory } from '../hooks/useBatteryTelemetryHistory'
 import { StatGrid } from '../components/StatGrid'
 import type { Stat } from '../components/StatGrid'
+import {
+  formatPercent,
+  formatTemperature,
+  formatPower,
+  formatDateTimeTwoLine,
+} from '../lib/format'
 
 // Roadmap 2.7: battery detail. `battery_id` comes from the URL
 // (/batteries/:batteryId) via react-router's useParams -- the first page in
@@ -40,12 +46,12 @@ export function BatteryDetailPage() {
 
   const stats: Stat[] = state
     ? [
-        { label: 'SOC', value: `${state.state_of_charge}%` },
+        { label: 'SOC', value: formatPercent(state.state_of_charge) },
         { label: 'Status', value: state.status },
-        { label: 'Temperature', value: `${state.temperature_c}°C` },
-        { label: 'Power', value: `${state.power_kw} kW` },
-        { label: 'Health', value: `${state.health_percent}%` },
-        { label: 'Last seen', value: new Date(state.last_seen).toLocaleString() },
+        { label: 'Temperature', value: formatTemperature(state.temperature_c) },
+        { label: 'Power', value: formatPower(state.power_kw) },
+        { label: 'Health', value: formatPercent(state.health_percent) },
+        { label: 'Last seen', value: formatDateTimeTwoLine(state.last_seen) },
       ]
     : [{ label: 'Status', value: 'No telemetry yet' }]
 
@@ -82,9 +88,9 @@ export function BatteryDetailPage() {
             {history.data.events.map((event) => (
               <tr key={event.event_id}>
                 <td>{new Date(event.timestamp).toLocaleString()}</td>
-                <td>{event.state_of_charge}%</td>
-                <td>{event.temperature_c}°C</td>
-                <td>{event.power_kw} kW</td>
+                <td>{formatPercent(event.state_of_charge)}</td>
+                <td>{formatTemperature(event.temperature_c)}</td>
+                <td>{formatPower(event.power_kw)}</td>
                 <td>{event.status}</td>
               </tr>
             ))}

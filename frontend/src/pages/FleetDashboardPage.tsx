@@ -1,6 +1,7 @@
 import { useFleetSummary } from '../hooks/useFleetSummary'
 import { StatGrid } from '../components/StatGrid'
 import type { Stat } from '../components/StatGrid'
+import { formatPercent, formatEnergy } from '../lib/format'
 
 // Roadmap 2.6: the fleet dashboard. Reads GET /api/v1/fleet/summary and
 // shows fleet-wide numbers using the shared StatGrid component (also used
@@ -31,10 +32,10 @@ export function FleetDashboardPage() {
     { label: 'Total devices', value: String(data.total_devices) },
     { label: 'Online', value: String(data.online_devices) },
     { label: 'Offline', value: String(data.offline_devices) },
-    { label: 'Average SOC', value: `${data.average_soc}%` },
+    { label: 'Average SOC', value: formatPercent(data.average_soc) },
     {
       label: 'Available energy',
-      value: `${data.total_available_energy_kwh} kWh`,
+      value: formatEnergy(data.total_available_energy_kwh),
     },
     { label: 'Charging', value: String(data.charging_devices) },
     { label: 'Discharging', value: String(data.discharging_devices) },

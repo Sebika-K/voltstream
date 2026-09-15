@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom'
 import { useBatteries } from '../hooks/useBatteries'
+import { formatPercent, formatTemperature, formatPower } from '../lib/format'
 
 // Roadmap 2.7: battery list. Columns per the Roadmap: ID, SOC, status,
 // temperature, power, last seen. Each row links to that battery's detail
@@ -53,10 +54,10 @@ export function BatteryListPage() {
                     {battery.battery_id}
                   </Link>
                 </td>
-                <td>{state ? `${state.state_of_charge}%` : '--'}</td>
+                <td>{state ? formatPercent(state.state_of_charge) : '--'}</td>
                 <td>{state?.status ?? '--'}</td>
-                <td>{state ? `${state.temperature_c}°C` : '--'}</td>
-                <td>{state ? `${state.power_kw} kW` : '--'}</td>
+                <td>{state ? formatTemperature(state.temperature_c) : '--'}</td>
+                <td>{state ? formatPower(state.power_kw) : '--'}</td>
                 <td>{state ? new Date(state.last_seen).toLocaleString() : 'never'}</td>
               </tr>
             )

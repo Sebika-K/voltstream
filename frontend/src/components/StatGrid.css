@@ -1,6 +1,6 @@
 .stat-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  display: flex;
+  flex-wrap: wrap;
   gap: 12px;
   margin-top: 24px;
   text-align: left;
@@ -10,11 +10,19 @@
   border: 1px solid #8884;
   border-radius: 10px;
   padding: 16px;
+  flex: 0 0 auto;
+  min-width: 120px;
 }
 
 .stat-value {
   font-size: 1.6rem;
   font-weight: 700;
+  /* pre (not nowrap): still never wraps at a space -- short values like
+     "49.4%" behave exactly as before -- but unlike nowrap, it honors a
+     literal "\n" in the string as a real line break instead of silently
+     discarding it. Used by "Last seen" (see lib/format.ts's
+     formatDateTimeTwoLine) to put the date and time on separate lines. */
+  white-space: pre;
 }
 
 .stat-label {
