@@ -1,0 +1,29 @@
+.connection-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+  color: #888;
+  margin-left: 12px;
+}
+
+.connection-status__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+/* "connecting" keeps the default grey above -- nothing to override. */
+
+.connection-status--live {
+  color: #2e7d32;
+}
+
+.connection-status--reconnecting {
+  color: #b26a00;
+}
+
+.connection-status--disconnected {
+  color: #c62828;
+}
