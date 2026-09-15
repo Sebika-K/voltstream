@@ -239,19 +239,19 @@ async def get_battery_telemetry_history(
     """Fetch raw historical telemetry for one battery (Roadmap 2.3, Contract
     section 31).
 
-    Raises \`APIError\` (404) if \`battery_id\` isn't registered at all --
+    Raises `APIError` (404) if `battery_id` isn't registered at all --
     consistent with every other per-battery endpoint. A registered battery
     with zero telemetry rows is a different, perfectly valid case: it
     returns an empty list, not a 404, exactly like a battery with no
-    \`battery_current_state\` row is valid rather than an error.
+    `battery_current_state` row is valid rather than an error.
 
     Results are always newest-first (Contract: "raw results default to
-    newest-first ordering") and always capped at \`limit\` -- this is what the
+    newest-first ordering") and always capped at `limit` -- this is what the
     Contract's "MUST enforce a maximum result limit" / "large unbounded
     history responses MUST NOT be supported" means in code: no matter how
     much history a battery has accumulated, one call here can't return all
-    of it. The query itself (\`WHERE battery_id = ... ORDER BY timestamp DESC
-    LIMIT ...\`) is exactly what Phase 1's \`(battery_id, timestamp DESC)\`
+    of it. The query itself (`WHERE battery_id = ... ORDER BY timestamp DESC
+    LIMIT ...`) is exactly what Phase 1's `(battery_id, timestamp DESC)`
     index exists to make fast.
     """
     battery = await session.get(Battery, battery_id)
