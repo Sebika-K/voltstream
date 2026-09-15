@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # Contract section 4.1: battery IDs are BAT-###### (six digits), e.g. BAT-000421.
 BATTERY_ID_PATTERN = re.compile(r"^BAT-\d{6}$")
@@ -125,3 +125,47 @@ class TelemetryBatchResponse(BaseModel):
     received: int
     inserted: int
     duplicates: int
+
+
+class TelemetryHistoryItem(BaseModel):
+    """One row of \`GET /api/v1/batteries/{battery_id}/telemetry\` (Roadmap
+    2.3, Contract section 31).
+
+    Unlike \`battery_current_state\`, history is about individual readings a
+    client might trace back to a specific event -- so \`event_id\` is included
+    here even though it isn't part of \`battery_current_state\`.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    event_id: UUID
+    battery_id: str
+    timestamp: datetime
+    state_of_charge: float
+    voltage: float
+    current: float
+    power_kw: float
+    temperature_c: float
+    health_percent: float
+    status: str
+
+
+class TelemetryHistoryResponse(BaseModel):
+    """\`GET /api/v1/batteries/{battery_id}/telemetry\`'s response envelope.
+
+    The Contract specifies this endpoint's query parameters (section 31) but
+    not a response envelope. \`count\` is included for the same reason
+    \`total\` was added to the battery list response in 2.2: \`limit\` alone
+    doesn't tell a client whether it got everything that matched or was cut
+    off by the Contract's required maximum-result-limit. \`resolution\`
+    echoes back what was actually applied -- currently always \`"raw"\`, since
+    time-bucketed aggregation is explicitly deferred by the Contract
+    ("Aggregation through resolution MAY be implemented after raw history
+    correctness is established") until a later step.
+    """
+
+    battery_id: str
+    events: list[TelemetryHistoryItem]
+    count: int
+    limit: int
+    resolution: str
