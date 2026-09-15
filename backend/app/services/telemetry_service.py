@@ -16,6 +16,7 @@ updates (Phase 3) are not part of either function here.
 
 from __future__ import annotations
 
+import datetime
 from collections.abc import Iterable
 
 from sqlalchemy import select
@@ -225,3 +226,48 @@ async def ingest_telemetry_batch(
 
     duplicates = len(batch.events) - inserted
     return inserted, duplicates
+
+
+async def get_battery_telemetry_history(
+    session: AsyncSession,
+    battery_id: str,
+    *,
+    start: datetime.datetime | None,
+    end: datetime.datetime | None,
+    limit: int,
+) -> list[Telemetry]:
+    """Fetch raw historical telemetry for one battery (Roadmap 2.3, Contract
+    section 31).
+
+    Raises \`APIError\` (404) if \`battery_id\` isn't registered at all --
+    consistent with every other per-battery endpoint. A registered battery
+    with zero telemetry rows is a different, perfectly valid case: it
+    returns an empty list, not a 404, exactly like a battery with no
+    \`battery_current_state\` row is valid rather than an error.
+
+    Results are always newest-first (Contract: "raw results default to
+    newest-first ordering") and always capped at \`limit\` -- this is what the
+    Contract's "MUST enforce a maximum result limit" / "large unbounded
+    history responses MUST NOT be supported" means in code: no matter how
+    much history a battery has accumulated, one call here can't return all
+    of it. The query itself (\`WHERE battery_id = ... ORDER BY timestamp DESC
+    LIMIT ...\`) is exactly what Phase 1's \`(battery_id, timestamp DESC)\`
+    index exists to make fast.
+    """
+    battery = await session.get(Battery, battery_id)
+    if battery is None:
+        raise APIError(
+            status_code=404,
+            code="BATTERY_NOT_FOUND",
+            message=f"Battery {battery_id} was not found",
+        )
+
+    query = select(Telemetry).where(Telemetry.battery_id == battery_id)
+    if start is not None:
+        query = query.where(Telemetry.timestamp >= start)
+    if end is not None:
+        query = query.where(Telemetry.timestamp <= end)
+    query = query.order_by(Telemetry.timestamp.desc()).limit(limit)
+
+    result = await session.execute(query)
+    return list(result.scalars().all())
