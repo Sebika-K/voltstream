@@ -9,3 +9,16 @@ body {
   min-width: 320px;
   min-height: 100vh;
 }
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin-top: 12px;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 1px solid #8884;
+}
