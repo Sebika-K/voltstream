@@ -60,3 +60,79 @@ class BatteryResponse(BaseModel):
     installation_date: date | None
     profile_type: str
     created_at: datetime
+
+
+class BatteryCurrentStateResponse(BaseModel):
+    """The `battery_current_state` fields, as exposed by the list and detail
+    battery APIs (Roadmap 2.2).
+
+    There is no "empty" instance of this model for a battery with no
+    telemetry yet -- the *field* holding it (on `BatteryListItem` /
+    `BatteryDetailResponse`) is `None` instead, matching Contract section
+    21's "a registered battery that has never reported telemetry MAY have no
+    current-state row."
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    last_seen: datetime
+    state_of_charge: float
+    temperature_c: float
+    power_kw: float
+    health_percent: float
+    status: str
+
+
+class BatteryListItem(BaseModel):
+    """One entry in `GET /api/v1/batteries` (Contract section 29)."""
+
+    battery_id: str
+    capacity_kwh: float
+    max_power_kw: float
+    nominal_voltage: float
+    latitude: float | None
+    longitude: float | None
+    installation_date: date | None
+    profile_type: str
+    created_at: datetime
+    current_state: BatteryCurrentStateResponse | None = None
+
+
+class BatteryListResponse(BaseModel):
+    """`GET /api/v1/batteries`'s response envelope.
+
+    The Contract specifies this endpoint's query parameters (section 29) but
+    not a response envelope -- `total` is a reasonable addition of our own:
+    without it, a client paging through results with `limit`/`offset` has no
+    way to know how many pages exist, or to render "showing 1-100 of 342."
+    """
+
+    batteries: list[BatteryListItem]
+    total: int
+    limit: int
+    offset: int
+
+
+class BatteryDetailResponse(BaseModel):
+    """`GET /api/v1/batteries/{battery_id}`'s response (Contract section 30).
+
+    `prediction` and `alerts` are part of the Contract's required response
+    shape ("current state, if available", "latest prediction, if available",
+    "unresolved alerts") -- but nothing populates them yet: predictions are
+    Phase 4, alerts are Phase 3. They're included now, always `None` / `[]`,
+    specifically so this response *shape* doesn't need to change again once
+    those phases land -- only the service function filling them in will.
+    """
+
+    battery_id: str
+    capacity_kwh: float
+    max_power_kw: float
+    nominal_voltage: float
+    latitude: float | None
+    longitude: float | None
+    installation_date: date | None
+    profile_type: str
+    created_at: datetime
+    current_state: BatteryCurrentStateResponse | None = None
+    prediction: dict | None = None
+    alerts: list[dict] = Field(default_factory=list)
