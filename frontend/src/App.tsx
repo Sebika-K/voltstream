@@ -1,21 +1,19 @@
-import { useState } from 'react'
+import { Routes, Route } from 'react-router-dom'
 import './App.css'
+import { NavBar } from './components/NavBar'
+import { FleetDashboardPage } from './pages/FleetDashboardPage'
+import { BatteryListPage } from './pages/BatteryListPage'
+import { BatteryDetailPage } from './pages/BatteryDetailPage'
 
-// Roadmap 2.5: this is just the frontend foundation -- proving the toolchain
-// (React + TypeScript + Vite) works end to end. The counter below has nothing
-// to do with VoltStream; it exists only so we can see React state updates
-// working in the browser before we wire up anything real. It gets replaced
-// once we connect to the backend API in the next step.
 function App() {
-  const [count, setCount] = useState(0)
-
   return (
     <>
-      <h1>VoltStream</h1>
-      <p>Frontend foundation is running (React + TypeScript + Vite).</p>
-      <button onClick={() => setCount((c) => c + 1)}>
-        count is {count}
-      </button>
+      <NavBar />
+      <Routes>
+        <Route path="/" element={<FleetDashboardPage />} />
+        <Route path="/batteries" element={<BatteryListPage />} />
+        <Route path="/batteries/:batteryId" element={<BatteryDetailPage />} />
+      </Routes>
     </>
   )
 }
