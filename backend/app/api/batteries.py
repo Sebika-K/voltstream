@@ -1,15 +1,20 @@
-"""Battery endpoints: registration (Roadmap 1.6, Contract section 6) and the
-list/detail read APIs (Roadmap 2.2, Contract sections 29-30).
+"""Battery endpoints: registration (Roadmap 1.6, Contract section 6), the
+list/detail read APIs (Roadmap 2.2, Contract sections 29-30), and historical
+telemetry (Roadmap 2.3, Contract section 31).
 
 Registration was the first endpoint in the project that writes to the
-database from an actual HTTP request. 2.2 is the first pair of endpoints
-that *read* it back -- everything before this only ever wrote data in, on
+database from an actual HTTP request. 2.2 was the first pair of endpoints
+that *read* it back -- everything before that only ever wrote data in, on
 the assumption that a future dashboard or client would eventually need to
-see it. This is that "eventually."
+see it. 2.3 extends that same idea from "what is this battery doing right
+now" to "what has this battery done over a time range": still read-only,
+just querying `telemetry`'s full history instead of `battery_current_state`'s
+single latest row.
 """
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Query, Response
@@ -24,7 +29,9 @@ from app.schemas.battery import (
     BatteryRegistrationRequest,
     BatteryResponse,
 )
+from app.schemas.telemetry import TelemetryHistoryItem, TelemetryHistoryResponse
 from app.services.battery_service import get_battery_detail, list_batteries, register_battery
+from app.services.telemetry_service import get_battery_telemetry_history
 
 router = APIRouter(prefix="/api/v1/batteries", tags=["batteries"])
 
@@ -134,4 +141,39 @@ async def get_battery_endpoint(
         current_state=_current_state_response(current_state),
         prediction=None,
         alerts=[],
+    )
+
+
+@router.get("/{battery_id}/telemetry", response_model=TelemetryHistoryResponse)
+async def get_battery_telemetry_endpoint(
+    battery_id: str,
+    start: datetime | None = Query(default=None, description="Inclusive lower timestamp bound"),
+    end: datetime | None = Query(default=None, description="Inclusive upper timestamp bound"),
+    limit: int = Query(default=100, ge=1, le=1000),
+    resolution: Literal["raw"] = Query(
+        default="raw",
+        description=(
+            "Only 'raw' is supported for now -- time-bucketed aggregation is "
+            "deferred (Contract section 31 explicitly allows this)."
+        ),
+    ),
+    session: AsyncSession = Depends(get_db_session),
+) -> TelemetryHistoryResponse:
+    """Fetch historical telemetry for one battery over an optional time range.
+
+    Unknown `battery_id` -> `APIError` (404) from the service layer. A
+    *registered* battery with no telemetry at all is not an error: it comes
+    back as `events: []`, the same way a battery with no current-state row
+    is a valid (not erroneous) detail response. `limit` is always enforced
+    -- there is no way to ask for "everything."
+    """
+    events = await get_battery_telemetry_history(
+        session, battery_id, start=start, end=end, limit=limit
+    )
+    return TelemetryHistoryResponse(
+        battery_id=battery_id,
+        events=[TelemetryHistoryItem.model_validate(event) for event in events],
+        count=len(events),
+        limit=limit,
+        resolution=resolution,
     )
