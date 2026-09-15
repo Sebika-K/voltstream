@@ -8,6 +8,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from app.api.batteries import router as batteries_router
+from app.api.fleet import router as fleet_router
 from app.api.system import router as system_router
 from app.api.telemetry import router as telemetry_router
 from app.core.config import get_settings
@@ -19,6 +20,7 @@ app = FastAPI(title=settings.APP_NAME)
 
 app.include_router(system_router)
 app.include_router(batteries_router)
+app.include_router(fleet_router)
 app.include_router(telemetry_router)
 
 # Registered once, here, so every product endpoint that raises APIError gets
