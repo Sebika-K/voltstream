@@ -10,6 +10,7 @@ import it directly.
 from __future__ import annotations
 
 from app.models.battery import Battery
+from app.models.battery_current_state import BatteryCurrentState
 from app.models.telemetry import Telemetry
 
-__all__ = ["Battery", "Telemetry"]
+__all__ = ["Battery", "BatteryCurrentState", "Telemetry"]
