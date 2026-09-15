@@ -2,7 +2,7 @@
 // this becomes a Vite environment variable (import.meta.env) once the
 // frontend needs to point anywhere other than localhost (Roadmap 5.1,
 // containerization).
-const API_BASE_URL = 'http://localhost:8000'
+export const API_BASE_URL = 'http://localhost:8000'
 
 export class ApiError extends Error {
   status: number
