@@ -1,17 +1,23 @@
 """Telemetry ingestion logic -- single (Roadmap 1.7 + 1.8), batch (Roadmap 1.9),
-and current-state upkeep (Roadmap 2.1).
+current-state upkeep (Roadmap 2.1), and anomaly-rule evaluation (Roadmap 3.3).
 
-Contract sections 15/17 (single), 16 (batch), and 18/19/21 (current state).
-Roadmap 1.7 built the basic path: validate, confirm the battery is
-registered, store the reading. 1.8 made repeat delivery of the same event
-safe (a no-op instead of a database error). 1.9 adds a second way to reach
-the same storage: accept many events in one request instead of one HTTP call
-per reading. 2.1 adds a second *effect* every successful ingestion has:
-keeping a `battery_current_state` row up to date, so "what is this battery
-doing right now" never requires scanning `telemetry`'s full history.
+Contract sections 15/17 (single), 16 (batch), 18/19/21 (current state), and
+15 step 7 / 24-26 (anomaly rules). Roadmap 1.7 built the basic path:
+validate, confirm the battery is registered, store the reading. 1.8 made
+repeat delivery of the same event safe (a no-op instead of a database
+error). 1.9 adds a second way to reach the same storage: accept many events
+in one request instead of one HTTP call per reading. 2.1 adds a second
+*effect* every successful ingestion has: keeping a `battery_current_state`
+row up to date, so "what is this battery doing right now" never requires
+scanning `telemetry`'s full history. 3.3 adds a third effect: evaluating the
+four telemetry-triggered anomaly rules (`LOW_SOC`/`HIGH_TEMPERATURE`/
+`RAPID_DISCHARGE`/`VOLTAGE_ANOMALY`) against each battery's newest accepted
+reading, and resolving any open `DEVICE_OFFLINE` alert now that this battery
+has proven it's reporting again (Contract section 23).
 
-Still deliberately narrow: evaluating anomaly rules / publishing realtime
-updates (Phase 3) are not part of either function here.
+Publishing realtime updates (Phase 3.1's `battery_update` event) is still
+not part of either function here -- see `app/services/realtime_publisher.py`
+for why that's deliberately deferred.
 """
 
 from __future__ import annotations
@@ -28,9 +34,16 @@ from app.models.battery import Battery
 from app.models.battery_current_state import BatteryCurrentState
 from app.models.telemetry import Telemetry
 from app.schemas.telemetry import TelemetryBatchRequest, TelemetryEvent
+from app.services.anomaly_detection_service import (
+    ALERT_TYPE_DEVICE_OFFLINE,
+    evaluate_rules_for_events,
+    resolve_alert_if_active,
+)
 
 
-async def _upsert_current_state(session: AsyncSession, events: Iterable[TelemetryEvent]) -> None:
+async def _upsert_current_state(
+    session: AsyncSession, events: Iterable[TelemetryEvent]
+) -> dict[str, TelemetryEvent]:
     """UPSERT `battery_current_state` from a set of newly-accepted events.
 
     Only ever called with events that were just actually inserted into
@@ -52,6 +65,11 @@ async def _upsert_current_state(session: AsyncSession, events: Iterable[Telemetr
     with a newer or equal `last_seen` (left untouched -- this is what keeps
     a late-arriving, out-of-order event from making the current-state view
     jump backwards in time, per Contract section 18).
+
+    Returns the same "one newest event per battery" reduction it computed
+    for its own use -- Roadmap 3.3's anomaly rules need the exact same
+    reduction (evaluate once per battery per request, against the newest
+    accepted reading), so the caller reuses this instead of recomputing it.
     """
     latest_per_battery: dict[str, TelemetryEvent] = {}
     for event in events:
@@ -60,7 +78,7 @@ async def _upsert_current_state(session: AsyncSession, events: Iterable[Telemetr
             latest_per_battery[event.battery_id] = event
 
     if not latest_per_battery:
-        return
+        return latest_per_battery
 
     upsert_statement = pg_insert(BatteryCurrentState).values(
         [
@@ -89,6 +107,37 @@ async def _upsert_current_state(session: AsyncSession, events: Iterable[Telemetr
         where=(BatteryCurrentState.last_seen <= upsert_statement.excluded.last_seen),
     )
     await session.execute(upsert_statement)
+    return latest_per_battery
+
+
+async def _evaluate_rules_and_resolve_offline(
+    session: AsyncSession,
+    latest_per_battery: dict[str, TelemetryEvent],
+    batteries_by_id: dict[str, Battery],
+) -> None:
+    """Roadmap 3.3's ingestion-side anomaly-rule step (Contract section 15
+    step 7), run once per battery per request against its newest accepted
+    reading -- shared by both single and batch ingestion.
+
+    Also resolves any open `DEVICE_OFFLINE` alert for every battery in
+    `latest_per_battery`: reaching this point means that battery just had a
+    telemetry event accepted, which is exactly Contract section 23's
+    recovery trigger ("when a newer valid telemetry event arrives for an
+    offline battery"). A battery that was never marked offline simply has
+    nothing to resolve -- `resolve_alert_if_active` is a no-op in that case,
+    not an error.
+    """
+    if not latest_per_battery:
+        return
+
+    await evaluate_rules_for_events(session, latest_per_battery.values(), batteries_by_id)
+    for battery_id, event in latest_per_battery.items():
+        await resolve_alert_if_active(
+            session,
+            battery_id=battery_id,
+            alert_type=ALERT_TYPE_DEVICE_OFFLINE,
+            resolved_at=event.timestamp,
+        )
 
 
 async def ingest_telemetry_event(session: AsyncSession, event: TelemetryEvent) -> bool:
@@ -136,7 +185,8 @@ async def ingest_telemetry_event(session: AsyncSession, event: TelemetryEvent) -
     created = result.scalar_one_or_none() is not None
 
     if created:
-        await _upsert_current_state(session, [event])
+        latest_per_battery = await _upsert_current_state(session, [event])
+        await _evaluate_rules_and_resolve_offline(session, latest_per_battery, {battery.battery_id: battery})
 
     # One commit for both writes: if anything above failed before this point,
     # the whole transaction rolls back and neither table changes (Contract
@@ -164,11 +214,14 @@ async def ingest_telemetry_batch(
     the offending event).
     """
     battery_ids = {event.battery_id for event in batch.events}
-    registered = await session.execute(
-        select(Battery.battery_id).where(Battery.battery_id.in_(battery_ids))
+    # Full Battery rows, not just IDs -- Roadmap 3.3's voltage-anomaly rule
+    # needs each battery's nominal_voltage, and fetching it here (once, for
+    # the whole batch) is cheaper than a second per-battery query later.
+    registered_result = await session.execute(
+        select(Battery).where(Battery.battery_id.in_(battery_ids))
     )
-    registered_ids = set(registered.scalars().all())
-    missing_ids = battery_ids - registered_ids
+    batteries_by_id = {battery.battery_id: battery for battery in registered_result.scalars().all()}
+    missing_ids = battery_ids - set(batteries_by_id)
     if missing_ids:
         raise APIError(
             status_code=404,
@@ -220,7 +273,8 @@ async def ingest_telemetry_batch(
         newly_inserted_events = [
             event for event in batch.events if event.event_id in inserted_ids
         ]
-        await _upsert_current_state(session, newly_inserted_events)
+        latest_per_battery = await _upsert_current_state(session, newly_inserted_events)
+        await _evaluate_rules_and_resolve_offline(session, latest_per_battery, batteries_by_id)
 
     await session.commit()
 
