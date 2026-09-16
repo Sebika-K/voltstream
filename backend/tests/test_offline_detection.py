@@ -12,6 +12,12 @@ as `test_fleet_summary.py`, for the same reason: `mark_stale_batteries_offline`
 is a blanket `UPDATE` over the *whole* `battery_current_state` table, with no
 per-test scoping possible, so leftover rows from a differently-ordered test
 run would silently change these results.
+
+As of Roadmap 3.3, `mark_stale_batteries_offline` returns the list of
+`battery_id`s newly marked offline (not just a count) -- its caller,
+`app/services/offline_detector.py`, needs the ids to raise a
+`DEVICE_OFFLINE` alert for each one. Tests below check the list directly
+(`== []` / `== ["BAT-..."]`) rather than a count.
 """
 
 from __future__ import annotations
@@ -95,7 +101,7 @@ async def test_recent_battery_is_left_alone():
     async with async_session_maker() as session:
         newly_offline = await mark_stale_batteries_offline(session)
 
-    assert newly_offline == 0
+    assert newly_offline == []
     assert await _get_status("BAT-900040") == "DISCHARGING"
 
 
@@ -111,7 +117,7 @@ async def test_stale_battery_is_marked_offline():
     async with async_session_maker() as session:
         newly_offline = await mark_stale_batteries_offline(session)
 
-    assert newly_offline == 1
+    assert newly_offline == ["BAT-900041"]
     assert await _get_status("BAT-900041") == "OFFLINE"
 
 
@@ -133,7 +139,7 @@ async def test_already_offline_battery_is_not_recounted():
     async with async_session_maker() as session:
         newly_offline = await mark_stale_batteries_offline(session)
 
-    assert newly_offline == 0
+    assert newly_offline == []
     assert await _get_status("BAT-900042") == "OFFLINE"
 
 
@@ -146,7 +152,7 @@ async def test_battery_that_never_reported_telemetry_is_unaffected():
     async with async_session_maker() as session:
         newly_offline = await mark_stale_batteries_offline(session)
 
-    assert newly_offline == 0
+    assert newly_offline == []
     async with async_session_maker() as session:
         state = await session.get(BatteryCurrentState, "BAT-900043")
     assert state is None
@@ -170,7 +176,7 @@ async def test_mixed_fleet_only_flips_the_stale_ones():
     async with async_session_maker() as session:
         newly_offline = await mark_stale_batteries_offline(session)
 
-    assert newly_offline == 1
+    assert newly_offline == ["BAT-900045"]
     assert await _get_status("BAT-900044") == "CHARGING"
     assert await _get_status("BAT-900045") == "OFFLINE"
 
