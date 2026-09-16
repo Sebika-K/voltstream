@@ -20,6 +20,7 @@ from app.api.system import router as system_router
 from app.api.telemetry import router as telemetry_router
 from app.core.config import get_settings
 from app.core.errors import APIError, api_error_handler
+from app.services.offline_detector import run_offline_detection_loop
 from app.services.realtime_publisher import run_fleet_update_publisher
 
 logger = logging.getLogger(__name__)
@@ -29,23 +30,34 @@ settings = get_settings()
 
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Start/stop the background realtime publisher alongside the app itself.
+    """Start/stop the app's background tasks alongside the app itself.
 
-    Roadmap 3.1: the `fleet_update` loop (`app/services/realtime_publisher.
-    py`) needs to run for as long as the process is up, independent of any
-    single request -- it's what feeds `GET /api/v1/stream`. FastAPI's
-    lifespan is the supported place to start/stop background work like this
-    (the older `@app.on_event("startup")` style is deprecated), so the task
-    is created when the app starts serving and cancelled cleanly when it
-    shuts down, instead of being left to leak.
+    Two independent loops run for as long as the process is up, neither of
+    them tied to any single request:
+
+    - Roadmap 3.1's `fleet_update` publisher (`app/services/
+      realtime_publisher.py`), feeding `GET /api/v1/stream`.
+    - Roadmap 3.2's offline-detection loop (`app/services/
+      offline_detector.py`), which is what actually notices a battery that
+      stopped sending telemetry.
+
+    FastAPI's lifespan is the supported place to start/stop background work
+    like this (the older `@app.on_event("startup")` style is deprecated).
+    Both tasks are created when the app starts serving and cancelled
+    cleanly on shutdown, instead of being left to leak.
     """
-    publisher_task = asyncio.create_task(run_fleet_update_publisher())
+    tasks = [
+        asyncio.create_task(run_fleet_update_publisher()),
+        asyncio.create_task(run_offline_detection_loop()),
+    ]
     try:
         yield
     finally:
-        publisher_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await publisher_task
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
 
 
 app = FastAPI(title=settings.APP_NAME, lifespan=lifespan)

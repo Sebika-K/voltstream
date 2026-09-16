@@ -53,6 +53,22 @@ class Settings(BaseSettings):
     # app/api/telemetry.py for where this gets enforced.
     MAX_BATCH_SIZE: int = 1000
 
+    # Roadmap 3.2 / Contract section 22: a battery counts as offline once this
+    # many seconds pass with no new telemetry. The Contract's default formula is
+    # `max(10, 3 * telemetry_interval)`; this project's simulator sends telemetry
+    # roughly once per second per device (Phase 1), so `3 * telemetry_interval`
+    # (~3s) is smaller than the 10-second floor -- the floor is what actually
+    # applies here, hence the plain default below rather than a derived one.
+    OFFLINE_THRESHOLD_SECONDS: float = 10.0
+
+    # How often the background offline-detection loop re-checks every battery's
+    # `last_seen` against the threshold above (Contract section 22: "runs
+    # periodically outside the primary telemetry request path"). Not itself
+    # part of the Contract's formula -- a deliberate, documented choice: frequent
+    # enough that stopping a simulated battery becomes visible within a handful
+    # of seconds, without re-scanning the table needlessly often.
+    OFFLINE_DETECTION_INTERVAL_SECONDS: float = 5.0
+
 
 @lru_cache
 def get_settings() -> Settings:
