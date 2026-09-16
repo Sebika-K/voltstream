@@ -13,6 +13,7 @@ from collections.abc import AsyncIterator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.alerts import router as alerts_router
 from app.api.batteries import router as batteries_router
 from app.api.fleet import router as fleet_router
 from app.api.stream import router as stream_router
@@ -83,6 +84,7 @@ app.include_router(batteries_router)
 app.include_router(fleet_router)
 app.include_router(telemetry_router)
 app.include_router(stream_router)
+app.include_router(alerts_router)
 
 # Registered once, here, so every product endpoint that raises APIError gets
 # the Contract's {"error": {"code", "message"}} envelope automatically -- see
