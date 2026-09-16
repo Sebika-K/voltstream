@@ -69,6 +69,24 @@ class Settings(BaseSettings):
     # of seconds, without re-scanning the table needlessly often.
     OFFLINE_DETECTION_INTERVAL_SECONDS: float = 5.0
 
+    # Roadmap 3.3 / Contract section 25: rule-based anomaly detection
+    # thresholds. All "VoltStream simulation/monitoring defaults" per the
+    # Contract's own framing (section 2) -- not real battery-safety limits.
+    LOW_SOC_WARNING_PERCENT: float = 20.0
+    LOW_SOC_CRITICAL_PERCENT: float = 10.0
+    HIGH_TEMPERATURE_WARNING_C: float = 50.0
+    HIGH_TEMPERATURE_CRITICAL_C: float = 55.0
+    # Rapid discharge is evaluated over a rolling window: how far back to look
+    # for a comparison SOC reading, and how many percentage points of decline
+    # across that window count as WARNING/CRITICAL.
+    RAPID_DISCHARGE_WINDOW_MINUTES: float = 5.0
+    RAPID_DISCHARGE_WARNING_PERCENTAGE_POINTS: float = 5.0
+    RAPID_DISCHARGE_CRITICAL_PERCENTAGE_POINTS: float = 10.0
+    # Percent deviation between measured voltage and the simulator's expected
+    # voltage (Contract section 11's formula), not an absolute volt figure.
+    VOLTAGE_ANOMALY_WARNING_PERCENT: float = 7.5
+    VOLTAGE_ANOMALY_CRITICAL_PERCENT: float = 12.5
+
 
 @lru_cache
 def get_settings() -> Settings:
