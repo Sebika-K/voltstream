@@ -10,6 +10,10 @@ explicit that "fleet calculations SHOULD primarily use battery_current_state"
 on that table too): it's the always-current, one-row-per-battery view, so
 this is one cheap aggregate query instead of scanning every historical
 reading a battery has ever sent.
+
+As of Roadmap 3.3, `active_alerts` / `critical_alerts` are real counts from
+the `alerts` table (Roadmap 3.3, Contract sections 24-26) rather than the
+hardcoded 0s this function returned before that table existed.
 """
 
 from __future__ import annotations
@@ -17,6 +21,7 @@ from __future__ import annotations
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.alert import Alert
 from app.models.battery import Battery
 from app.models.battery_current_state import BatteryCurrentState
 from app.schemas.fleet import FleetSummaryResponse
@@ -78,6 +83,12 @@ async def get_fleet_summary(session: AsyncSession) -> FleetSummaryResponse:
     online_devices = known_state_devices - (row.offline_status_devices or 0)
     offline_devices = total_devices - online_devices
 
+    alert_query = select(
+        func.count().label("active_alerts"),
+        func.count().filter(Alert.severity == "CRITICAL").label("critical_alerts"),
+    ).where(Alert.resolved.is_(False))
+    alert_row = (await session.execute(alert_query)).one()
+
     return FleetSummaryResponse(
         total_devices=total_devices,
         online_devices=online_devices,
@@ -95,10 +106,6 @@ async def get_fleet_summary(session: AsyncSession) -> FleetSummaryResponse:
         charging_devices=row.charging_devices or 0,
         discharging_devices=row.discharging_devices or 0,
         idle_devices=row.idle_devices or 0,
-        # Phase 3 (alerts) doesn't exist yet -- always 0 for now, the same
-        # future-proofing pattern as BatteryDetailResponse.alerts (Roadmap
-        # 2.2): the field is already part of the response shape so nothing
-        # here needs to change once alerts land.
-        active_alerts=0,
-        critical_alerts=0,
+        active_alerts=alert_row.active_alerts or 0,
+        critical_alerts=alert_row.critical_alerts or 0,
     )
