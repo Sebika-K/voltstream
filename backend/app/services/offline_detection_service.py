@@ -30,7 +30,7 @@ from app.models.battery_current_state import BatteryCurrentState
 OFFLINE_STATUS = "OFFLINE"
 
 
-async def mark_stale_batteries_offline(session: AsyncSession) -> int:
+async def mark_stale_batteries_offline(session: AsyncSession) -> list[str]:
     """Flip every battery whose `last_seen` is older than the configured
     threshold to `status="OFFLINE"` (Contract section 22).
 
@@ -45,8 +45,11 @@ async def mark_stale_batteries_offline(session: AsyncSession) -> int:
     section 21) simply isn't matched by this `UPDATE` -- there's no row to
     flip, and none is fabricated.
 
-    Returns the number of batteries newly marked offline this call, purely
-    for logging -- 0 on a perfectly normal, fully-online fleet.
+    Returns the `battery_id`s newly marked offline this call (via a
+    `RETURNING` clause on the same bulk `UPDATE` -- no second query) --
+    empty on a perfectly normal, fully-online fleet. As of Roadmap 3.3, the
+    caller (`app/services/offline_detector.py`) needs these ids, not just a
+    count, to raise a `DEVICE_OFFLINE` alert for each one.
     """
     settings = get_settings()
     cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
@@ -58,7 +61,9 @@ async def mark_stale_batteries_offline(session: AsyncSession) -> int:
         .where(BatteryCurrentState.status != OFFLINE_STATUS)
         .where(BatteryCurrentState.last_seen < cutoff)
         .values(status=OFFLINE_STATUS)
+        .returning(BatteryCurrentState.battery_id)
     )
     result = await session.execute(statement)
+    newly_offline_ids = list(result.scalars().all())
     await session.commit()
-    return result.rowcount or 0
+    return newly_offline_ids
