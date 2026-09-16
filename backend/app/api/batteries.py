@@ -37,10 +37,11 @@ router = APIRouter(prefix="/api/v1/batteries", tags=["batteries"])
 
 # Contract section 7 defines CHARGING/DISCHARGING/IDLE/FAULT as what a device
 # reports; OFFLINE is explicitly called out there as a backend-derived state
-# instead (Roadmap 3.2, not built yet). Both belong here: this is what a
-# `battery_current_state.status` column can hold, not just what a producer
-# sends, and filtering by ?status=OFFLINE should already be valid query
-# syntax even before anything ever sets that value.
+# instead -- one that Roadmap 3.2's offline-detection loop now actually
+# writes (see app/services/offline_detection_service.py). Both belong here:
+# this is what a `battery_current_state.status` column can hold, not just
+# what a producer sends, so filtering by ?status=OFFLINE is valid query
+# syntax and now returns real, periodically-updated results.
 BatteryStatusFilter = Literal["CHARGING", "DISCHARGING", "IDLE", "FAULT", "OFFLINE"]
 
 

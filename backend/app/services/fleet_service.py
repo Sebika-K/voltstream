@@ -39,14 +39,15 @@ async def get_fleet_summary(session: AsyncSession) -> FleetSummaryResponse:
     Roadmap, so this makes the same kind of reasonable, documented call that
     Roadmap 2.2 made for the OFFLINE status filter: a battery counts as
     online if it has a current-state row at all AND that row's status isn't
-    explicitly `"OFFLINE"`. Nothing sets `status="OFFLINE"` yet -- that's
-    Roadmap 3.2's job -- so right now `online_devices` is simply "batteries
-    that have ever reported telemetry." Once 3.2 lands and starts marking
-    stale batteries OFFLINE, this calculation picks that up automatically
-    with no changes needed here. A battery explicitly marked OFFLINE still
-    *has* known current state, though -- it still counts toward
-    `average_soc` / `total_available_energy_kwh`, just not toward
-    `online_devices`.
+    explicitly `"OFFLINE"`. As of Roadmap 3.2, something actually sets
+    `status="OFFLINE"` now: the periodic loop in
+    `app/services/offline_detector.py` flips any battery whose `last_seen`
+    has gone stale, via `app/services/offline_detection_service.py`. This
+    function needed zero changes to pick that up -- it was already reading
+    whatever `status` says, whenever that happens to be OFFLINE. A battery
+    explicitly marked OFFLINE still *has* known current state, though -- it
+    still counts toward `average_soc` / `total_available_energy_kwh`, just
+    not toward `online_devices`.
     """
     total_devices = await session.scalar(select(func.count()).select_from(Battery)) or 0
 
