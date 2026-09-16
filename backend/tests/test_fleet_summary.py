@@ -133,7 +133,7 @@ async def test_known_dataset_produces_exact_expected_totals(client):
 
 
 async def test_offline_status_devices_still_count_toward_state_derived_averages(client):
-    """A battery explicitly marked OFFLINE (Roadmap 3.2, not built yet -- but
+    """A battery explicitly marked OFFLINE (Roadmap 3.2 now writes this status --
     the status value is already valid) still has a *known* current-state
     reading; it just doesn't count as currently online. It should still
     contribute to average_soc/available energy, per Contract section 28's
