@@ -4,6 +4,7 @@ import { NavBar } from './components/NavBar'
 import { FleetDashboardPage } from './pages/FleetDashboardPage'
 import { BatteryListPage } from './pages/BatteryListPage'
 import { BatteryDetailPage } from './pages/BatteryDetailPage'
+import { AlertsPage } from './pages/AlertsPage'
 
 function App() {
   return (
@@ -13,6 +14,7 @@ function App() {
         <Route path="/" element={<FleetDashboardPage />} />
         <Route path="/batteries" element={<BatteryListPage />} />
         <Route path="/batteries/:batteryId" element={<BatteryDetailPage />} />
+        <Route path="/alerts" element={<AlertsPage />} />
       </Routes>
     </>
   )
