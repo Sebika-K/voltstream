@@ -12,6 +12,7 @@ export function NavBar() {
         Fleet Dashboard
       </NavLink>
       <NavLink to="/batteries">Batteries</NavLink>
+      <NavLink to="/alerts">Alerts</NavLink>
     </nav>
   )
 }
