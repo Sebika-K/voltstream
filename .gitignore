@@ -33,6 +33,10 @@ yarn-error.log*
 ml/models/*.joblib
 *.joblib
 
+# ML training data (regenerated from the database via build_dataset.py --
+# not source, and grows every time the simulator runs; see Roadmap 4.2)
+ml/data/*.csv
+
 # Docker
 docker-compose.override.yml
 

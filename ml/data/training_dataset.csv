@@ -1,1 +1,0 @@
-battery_id,timestamp,state_of_charge,power_kw,temperature_c,health_percent,capacity_kwh,rolling_power_5m,rolling_power_15m,soc_change_5m,hour_of_day,profile_type,minutes_to_critical
