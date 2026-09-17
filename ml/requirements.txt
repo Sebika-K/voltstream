@@ -1,0 +1,23 @@
+# ML pipeline dependencies (Roadmap 4.2+; PRD section 15's stated ML stack:
+# pandas / scikit-learn). This is its own component with its own virtual
+# environment, same as backend/ and simulator/ each have their own --
+# nothing here is imported by, or imports from, the backend package.
+
+pandas>=2.2,<3.0
+numpy>=1.26,<3.0
+
+# scikit-learn/joblib aren't used yet by 4.2 (pure data-building, no model
+# training here) -- included now so 4.3/4.4 (baseline evaluation, model
+# training/comparison) don't need a second round of "install this new
+# dependency" partway through the phase.
+scikit-learn>=1.5,<2.0
+joblib>=1.4,<2.0
+
+# Reads the same PostgreSQL telemetry the backend writes. A plain
+# synchronous engine (psycopg2), not the backend's async asyncpg driver --
+# see build_dataset.py's module docstring for why.
+sqlalchemy>=2.0.36,<3.0
+psycopg2-binary>=2.9,<3.0
+
+# Loads DATABASE_URL from the project's existing .env file.
+python-dotenv>=1.0,<2.0
