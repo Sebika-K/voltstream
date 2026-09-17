@@ -87,6 +87,24 @@ class Settings(BaseSettings):
     VOLTAGE_ANOMALY_WARNING_PERCENT: float = 7.5
     VOLTAGE_ANOMALY_CRITICAL_PERCENT: float = 12.5
 
+    # Roadmap 4.1 / Contract sections 37-39: depletion-prediction baseline.
+    # `CRITICAL_SOC_PERCENT` is conceptually distinct from
+    # `LOW_SOC_CRITICAL_PERCENT` above even though both are "critical SOC"
+    # numbers -- that one drives the LOW_SOC *alert* (Roadmap 3.3); this one
+    # is the target SOC the depletion prediction counts down to (Contract
+    # section 39: "prediction estimates time until state_of_charge reaches
+    # this configured critical threshold"). They happen to share a default
+    # value in this project, but changing one must not silently change the
+    # other, hence two separate settings rather than one shared constant.
+    CRITICAL_SOC_PERCENT: float = 20.0
+    # Contract section 39: a battery reporting `status="DISCHARGING"` with
+    # a negligible discharge rate (near 0 kW) is technically discharging but
+    # not usefully predictable -- dividing by a near-zero power draw would
+    # produce a wildly large (and meaningless) time-to-critical estimate.
+    # Below this magnitude of power draw, the prediction is withheld
+    # entirely rather than returned as a huge, misleading number.
+    MIN_DISCHARGE_POWER_KW: float = 0.1
+
 
 @lru_cache
 def get_settings() -> Settings:
