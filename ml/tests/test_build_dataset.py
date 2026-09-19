@@ -129,3 +129,51 @@ def test_no_future_critical_point_is_excluded_not_fabricated():
 
     assert result == []
     assert stats["no_future_critical_point"] > 0
+
+
+def test_restart_gap_that_slips_past_the_15min_check_is_still_excluded():
+    # Reproduces the real bug found in the Roadmap 4.4 re-run: an "old run"
+    # segment (minutes 0-20), then a ~4.5-hour gap (the simulator was
+    # stopped and restarted), then a "new run" segment starting at minute
+    # 300. Check 3 only compares `as_of` against this battery's very
+    # first-ever reading (minute 0), so it wrongly considers 300+ minutes
+    # of "history" to exist, even though the real continuous window right
+    # before minute 303 is only 3 minutes long. `soc_change_5m` needs a
+    # reading from 5 minutes back and can't find one -- this used to slip
+    # through as a NaN feature value instead of being excluded.
+    old_run = [{"minutes": m, "soc": 80.0 - m, "power_kw": -2.0, "status": "DISCHARGING"} for m in range(0, 21)]
+    new_run = [
+        {"minutes": 300 + m, "soc": 80.0 - 3.0 * m, "power_kw": -2.0, "status": "DISCHARGING"} for m in range(0, 21)
+    ]
+    telemetry = _telemetry(old_run + new_run)
+
+    stats = Counter()
+    result = _build_rows_for_battery(
+        "BAT-000006", telemetry, capacity_kwh=10.0, profile_type="RESIDENTIAL", stats=stats
+    )
+
+    # The point 3 minutes after the restart (minute 303) must NOT appear --
+    # not as a row with a NaN feature, not at all.
+    assert all(row["timestamp"] != pd.Timestamp("2026-01-01T00:00:00Z") + pd.Timedelta(minutes=303) for row in result)
+    # 15 old-run rows (minutes 0-14) are genuinely too early in that run's
+    # own history, plus 5 new-run rows (minutes 300-304, the first 5
+    # minutes after the restart) that check 3 wrongly let through but the
+    # NaN check now catches.
+    assert stats["insufficient_history"] == 20
+
+    # No row in the output ever has a NaN feature value -- the whole point
+    # of the fix.
+    for row in result:
+        for key, value in row.items():
+            assert not (isinstance(value, float) and pd.isna(value)), f"{key} is NaN in row {row}"
+
+    # A point far enough past the restart to have a real 5-minute window
+    # behind it (minute 308: 8 real minutes of new-run data) is still
+    # correctly included, with a real (non-NaN) soc_change_5m.
+    eligible_308 = [
+        row
+        for row in result
+        if row["timestamp"] == pd.Timestamp("2026-01-01T00:00:00Z") + pd.Timedelta(minutes=308)
+    ]
+    assert len(eligible_308) == 1
+    assert eligible_308[0]["soc_change_5m"] == -15.0  # loses 3.0/min for 5 minutes
