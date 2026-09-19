@@ -205,6 +205,24 @@ def _build_rows_for_battery(
 
         window = df.iloc[window_start : i + 1]
         features = compute_features_for_point(window, capacity_kwh=capacity_kwh, profile_type=profile_type)
+
+        # 3b. check 3 above only catches a battery whose very first-ever
+        # reading (across ALL simulator runs, since `telemetry` is this
+        # battery's full stored history) is too recent. It can't detect a
+        # *gap* inside an otherwise-long history -- e.g. the simulator was
+        # stopped and restarted, so this battery's telemetry resumes after
+        # a real-world pause even though its first-ever reading was hours
+        # ago. When that happens, `compute_features_for_point` honestly
+        # can't find a reading far enough back for a feature with its own
+        # shorter lookback (`soc_change_5m` needs one from 5 minutes ago)
+        # and reports NaN rather than guessing -- see its docstring in
+        # `ml/features.py`. Treat that exactly like insufficient history:
+        # it is the same "not enough real data yet" problem, just caught
+        # one level deeper than check 3 can see.
+        if any(isinstance(value, float) and np.isnan(value) for value in dataclasses.asdict(features).values()):
+            stats["insufficient_history"] += 1
+            continue
+
         minutes_to_critical = (ts.iat[j] - as_of).total_seconds() / 60.0
 
         stats["eligible"] += 1
