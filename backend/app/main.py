@@ -21,6 +21,7 @@ from app.api.system import router as system_router
 from app.api.telemetry import router as telemetry_router
 from app.core.config import get_settings
 from app.core.errors import APIError, api_error_handler
+from app.services import model_registry
 from app.services.offline_detector import run_offline_detection_loop
 from app.services.realtime_publisher import run_fleet_update_publisher
 
@@ -31,7 +32,10 @@ settings = get_settings()
 
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Start/stop the app's background tasks alongside the app itself.
+    """Start/stop the app's background tasks alongside the app itself, and
+    load the ML model artifact exactly once (Roadmap 4.5, Contract section
+    46: "The backend loads the model once during application startup ...
+    MUST NOT reload the artifact for every request.").
 
     Two independent loops run for as long as the process is up, neither of
     them tied to any single request:
@@ -46,7 +50,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     like this (the older `@app.on_event("startup")` style is deprecated).
     Both tasks are created when the app starts serving and cancelled
     cleanly on shutdown, instead of being left to leak.
+
+    The model load isn't a task -- it's a one-shot step, done before either
+    loop starts, so a request that arrives the instant the app is "up" sees
+    whatever the load attempt actually produced (a real model, or `None`
+    meaning "use the baseline") rather than racing it.
     """
+    model_registry.set_loaded_model(model_registry.load_model_artifact(settings.MODEL_ARTIFACT_PATH))
+
     tasks = [
         asyncio.create_task(run_fleet_update_publisher()),
         asyncio.create_task(run_offline_detection_loop()),

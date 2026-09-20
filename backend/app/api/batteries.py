@@ -14,12 +14,13 @@ single latest row.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.db.session import get_db_session
 from app.schemas.battery import (
     BatteryCurrentStateResponse,
@@ -29,9 +30,19 @@ from app.schemas.battery import (
     BatteryRegistrationRequest,
     BatteryResponse,
 )
+from app.schemas.prediction import PredictionResponse
 from app.schemas.telemetry import TelemetryHistoryItem, TelemetryHistoryResponse
 from app.services.battery_service import get_battery_detail, list_batteries, register_battery
+from app.services.prediction_service import compute_prediction
 from app.services.telemetry_service import get_battery_telemetry_history
+
+# Roadmap 4.5: how far back to fetch telemetry for the ML feature window
+# (Contract section 41's longest rolling window is 15 minutes). A little
+# slack beyond exactly 15 minutes is intentional -- clock/query-boundary
+# edges shouldn't cause a reading that's genuinely still relevant to be
+# excluded.
+_PREDICTION_HISTORY_LOOKBACK_MINUTES = 20
+_PREDICTION_HISTORY_ROW_LIMIT = 2000
 
 router = APIRouter(prefix="/api/v1/batteries", tags=["batteries"])
 
@@ -177,4 +188,106 @@ async def get_battery_telemetry_endpoint(
         count=len(events),
         limit=limit,
         resolution=resolution,
+    )
+
+
+@router.get("/{battery_id}/prediction", response_model=PredictionResponse)
+async def get_battery_prediction_endpoint(
+    battery_id: str,
+    session: AsyncSession = Depends(get_db_session),
+) -> PredictionResponse:
+    """Depletion prediction for one battery (Roadmap 4.5, Contract section
+    47): a real trained ML model if one is loaded and can actually answer,
+    the physics baseline otherwise -- see
+    `app/services/prediction_service.py`'s `compute_prediction` for the
+    fallback chain itself (Contract section 46).
+
+    Unknown `battery_id` -> `APIError` (404), same as every other
+    per-battery endpoint. A registered battery with no current-state row
+    yet is not an error -- every field this function can't answer just
+    comes back `None`/unavailable, the same way `BatteryDetailResponse`
+    already handles a battery that's never reported telemetry.
+    """
+    battery, current_state = await get_battery_detail(session, battery_id)
+    settings = get_settings()
+
+    if current_state is None:
+        result = compute_prediction(
+            capacity_kwh=battery.capacity_kwh,
+            state_of_charge=None,
+            power_kw=None,
+            status=None,
+            temperature_c=None,
+            health_percent=None,
+            profile_type=battery.profile_type,
+            as_of=None,
+            history=[],
+            critical_soc_percent=settings.CRITICAL_SOC_PERCENT,
+            min_discharge_power_kw=settings.MIN_DISCHARGE_POWER_KW,
+        )
+        return PredictionResponse(
+            battery_id=battery_id,
+            current_soc=None,
+            critical_soc=settings.CRITICAL_SOC_PERCENT,
+            prediction_available=result.prediction_available,
+            predicted_minutes_to_critical=result.predicted_minutes_to_critical,
+            predicted_critical_timestamp=None,
+            prediction_method=result.prediction_method,
+            model_version=result.model_version,
+            reason=result.reason,
+        )
+
+    # `as_of` is the current reading's own timestamp, not wall-clock "now"
+    # -- the prediction is for this specific most-recent known state, and
+    # computing "how much has SOC changed in the last 5 minutes" only
+    # makes sense relative to when that state was actually observed, not
+    # to whatever moment the HTTP request happens to arrive.
+    as_of = current_state.last_seen
+    telemetry_rows = await get_battery_telemetry_history(
+        session,
+        battery_id,
+        start=as_of - timedelta(minutes=_PREDICTION_HISTORY_LOOKBACK_MINUTES),
+        end=as_of,
+        limit=_PREDICTION_HISTORY_ROW_LIMIT,
+    )
+    # Strictly BEFORE `as_of` -- the current reading itself is passed to
+    # `compute_prediction` separately (from `current_state`), never
+    # duplicated into the history list (see `live_features.py`'s own
+    # comment on why that would double-count it).
+    history = [
+        (row.timestamp, row.state_of_charge, row.power_kw)
+        for row in telemetry_rows
+        if row.timestamp < as_of
+    ]
+
+    result = compute_prediction(
+        capacity_kwh=battery.capacity_kwh,
+        state_of_charge=current_state.state_of_charge,
+        power_kw=current_state.power_kw,
+        status=current_state.status,
+        temperature_c=current_state.temperature_c,
+        health_percent=current_state.health_percent,
+        profile_type=battery.profile_type,
+        as_of=as_of,
+        history=history,
+        critical_soc_percent=settings.CRITICAL_SOC_PERCENT,
+        min_discharge_power_kw=settings.MIN_DISCHARGE_POWER_KW,
+    )
+
+    predicted_critical_timestamp = (
+        as_of + timedelta(minutes=result.predicted_minutes_to_critical)
+        if result.predicted_minutes_to_critical is not None
+        else None
+    )
+
+    return PredictionResponse(
+        battery_id=battery_id,
+        current_soc=current_state.state_of_charge,
+        critical_soc=settings.CRITICAL_SOC_PERCENT,
+        prediction_available=result.prediction_available,
+        predicted_minutes_to_critical=result.predicted_minutes_to_critical,
+        predicted_critical_timestamp=predicted_critical_timestamp,
+        prediction_method=result.prediction_method,
+        model_version=result.model_version,
+        reason=result.reason,
     )

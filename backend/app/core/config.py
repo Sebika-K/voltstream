@@ -13,8 +13,18 @@ prediction, simulator behavior, etc. -- will be added alongside the features tha
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path as _Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# This file lives at backend/app/core/config.py -- three directories up
+# from here is the repo root, the same level `ml/` and `simulator/` sit
+# at. Computed once, here, rather than assuming the process's current
+# working directory happens to be `backend/` (true when a human runs
+# `uvicorn app.main:app --reload` from that directory, but not guaranteed
+# for every future way this app might get started -- Docker in Phase 5,
+# for instance).
+_REPO_ROOT = _Path(__file__).resolve().parents[3]
 
 
 class Settings(BaseSettings):
@@ -104,6 +114,16 @@ class Settings(BaseSettings):
     # Below this magnitude of power draw, the prediction is withheld
     # entirely rather than returned as a huge, misleading number.
     MIN_DISCHARGE_POWER_KW: float = 0.1
+
+    # Roadmap 4.5 / Contract sections 45-46: where the backend looks for
+    # the ML model artifact `ml/training/persist_model.py` writes. Loaded
+    # exactly once, at startup (see `app.main`'s lifespan) -- if this path
+    # doesn't exist (the real, current state of this project: Roadmap
+    # 4.4's measured result was that the physics baseline beat every
+    # trained model, so nothing has been persisted yet) or fails to load
+    # for any other reason, the app stays up and every prediction request
+    # is served by the baseline instead (`app/services/model_registry.py`).
+    MODEL_ARTIFACT_PATH: _Path = _REPO_ROOT / "ml" / "models" / "depletion_model_v1.joblib"
 
 
 @lru_cache
