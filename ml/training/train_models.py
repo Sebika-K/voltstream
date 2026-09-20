@@ -123,19 +123,33 @@ def evaluate_baseline_on(test: pd.DataFrame) -> dict:
     }
 
 
-def train_and_evaluate(train: pd.DataFrame, test: pd.DataFrame) -> dict[str, dict]:
-    """Train every candidate model on `train`, score every one of them on
-    the FULL `test` set. Unlike the baseline, a trained model never has a
-    "can't answer this row" case -- it always produces a number, even for
-    a near-zero discharge rate -- so its row count will legitimately be
-    higher than the baseline's whenever the baseline had to exclude any."""
-    results: dict[str, dict] = {"baseline": evaluate_baseline_on(test)}
-
+def fit_candidate_models(train: pd.DataFrame) -> dict[str, Pipeline]:
+    """Fit every candidate model on `train` and return the fitted
+    pipelines themselves (not just their scores) -- Roadmap 4.5's model
+    persistence needs the actual fitted object for whichever one wins,
+    not only its MAE/RMSE, so this is split out from scoring rather than
+    folding fitting and scoring into one function that throws the fitted
+    pipelines away."""
     x_train, y_train = train[FEATURE_COLUMNS], train[TARGET_COLUMN]
-    x_test, y_test = test[FEATURE_COLUMNS], test[TARGET_COLUMN].to_numpy()
-
+    fitted: dict[str, Pipeline] = {}
     for name, pipeline in build_candidate_models().items():
         pipeline.fit(x_train, y_train)
+        fitted[name] = pipeline
+    return fitted
+
+
+def evaluate_models(fitted: dict[str, Pipeline], test: pd.DataFrame) -> dict[str, dict]:
+    """Score every already-fitted candidate model on the FULL `test` set,
+    alongside the baseline. Unlike the baseline, a trained model never has
+    a "can't answer this row" case -- it always produces a number, even
+    for a near-zero discharge rate -- so its row count will legitimately
+    be higher than the baseline's whenever the baseline had to exclude
+    any."""
+    results: dict[str, dict] = {"baseline": evaluate_baseline_on(test)}
+
+    x_test, y_test = test[FEATURE_COLUMNS], test[TARGET_COLUMN].to_numpy()
+
+    for name, pipeline in fitted.items():
         predicted = pipeline.predict(x_test)
         results[name] = {
             "mae_minutes": mean_absolute_error(y_test, predicted),
@@ -144,6 +158,17 @@ def train_and_evaluate(train: pd.DataFrame, test: pd.DataFrame) -> dict[str, dic
         }
 
     return results
+
+
+def train_and_evaluate(train: pd.DataFrame, test: pd.DataFrame) -> dict[str, dict]:
+    """Fit every candidate model on `train`, score every one of them on
+    `test`, alongside the baseline. Kept as its own function (rather than
+    inlined into `main`) since Roadmap 4.4's tests already call this
+    directly -- it's now a thin wrapper over `fit_candidate_models` +
+    `evaluate_models`, which Roadmap 4.5 uses separately when it needs the
+    fitted pipeline objects themselves, not just their scores."""
+    fitted = fit_candidate_models(train)
+    return evaluate_models(fitted, test)
 
 
 def select_best_model(results: dict[str, dict]) -> str:
