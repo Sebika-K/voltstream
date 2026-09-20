@@ -159,3 +159,181 @@ def compute_baseline_prediction(
         model_version=None,
         reason=None,
     )
+
+
+# --- Roadmap 4.5: ML prediction with baseline fallback (Contract sections
+# 45-47) -------------------------------------------------------------------
+#
+# Everything above this point is 4.1's baseline formula, unchanged. What
+# follows sits in front of it: try a real trained model if one is loaded,
+# and fall back to exactly the function above whenever ML isn't available
+# or doesn't work, per Contract section 46:
+#
+#   "If the artifact cannot be loaded: ... prediction service uses physics
+#    baseline, response identifies prediction_method='baseline'."
+#   "If ML inference itself fails unexpectedly: record structured error,
+#    attempt baseline prediction when possible."
+
+import dataclasses
+import logging
+
+from app.services import model_registry
+from app.services.live_features import compute_live_features
+
+logger = logging.getLogger(__name__)
+
+PREDICTION_METHOD_ML = "ml"
+
+
+@dataclass(frozen=True)
+class PredictionResult:
+    """The final outcome of `compute_prediction` below -- same shape as
+    `BaselinePredictionResult` on purpose, since `GET
+    /api/v1/batteries/{battery_id}/prediction` (Roadmap 4.5) returns this
+    same shape regardless of which method actually produced it."""
+
+    prediction_available: bool
+    predicted_minutes_to_critical: float | None
+    prediction_method: str | None
+    model_version: str | None
+    reason: str | None
+
+
+def _ml_prediction_could_apply(
+    *, state_of_charge: float | None, status: str | None, critical_soc_percent: float
+) -> bool:
+    """A cheap pre-check, deliberately mirroring the *first three* of the
+    baseline's own eligibility rules (current state exists, discharging,
+    still above critical) -- not rule 4 (discharge-rate floor), which is a
+    baseline-specific division-by-near-zero problem that doesn't apply to
+    a trained model at all (Roadmap 4.4's own `train_models.py` notes a
+    trained model "never has a can't-answer-this-row case").
+
+    This exists purely so the backend doesn't bother fetching telemetry
+    history and running inference for a battery that's charging, idle, or
+    already critical -- a case where "time until critical" isn't a
+    meaningful question regardless of method. It is NOT a second source of
+    truth for *which reason* gets reported: whenever this returns False (or
+    ML is attempted and doesn't work out), `compute_baseline_prediction`
+    below is what actually determines and reports the reason, so there is
+    only ever one place that decides the final "reason" string.
+    """
+    return (
+        state_of_charge is not None
+        and status == "DISCHARGING"
+        and state_of_charge > critical_soc_percent
+    )
+
+
+def _attempt_ml_prediction(
+    loaded: model_registry.LoadedModel,
+    *,
+    state_of_charge: float,
+    power_kw: float,
+    temperature_c: float | None,
+    health_percent: float | None,
+    capacity_kwh: float,
+    profile_type: str,
+    as_of,
+    history: list[tuple],
+) -> float | None:
+    """Try to produce a real ML prediction. Returns `None` (never raises)
+    for any reason inference can't happen right now -- insufficient
+    telemetry history to compute the live feature vector, or the model
+    itself raising during `.predict(...)` -- so the caller can fall back to
+    the baseline exactly as Contract 46 requires."""
+    try:
+        features = compute_live_features(
+            history=history,
+            as_of=as_of,
+            current_soc=state_of_charge,
+            current_power_kw=power_kw,
+            temperature_c=temperature_c if temperature_c is not None else 25.0,
+            health_percent=health_percent if health_percent is not None else 100.0,
+            capacity_kwh=capacity_kwh,
+            profile_type=profile_type,
+        )
+        if features is None:
+            return None
+
+        import pandas as pd
+
+        row = pd.DataFrame([dataclasses.asdict(features)])
+        predicted = loaded.pipeline.predict(row)
+        return float(predicted[0])
+    except Exception:
+        # Contract 46: "record structured error, attempt baseline
+        # prediction when possible" -- logged here, handled by the caller.
+        logger.exception("ml_inference_failed")
+        return None
+
+
+def compute_prediction(
+    *,
+    capacity_kwh: float | None,
+    state_of_charge: float | None,
+    power_kw: float | None,
+    status: str | None,
+    temperature_c: float | None,
+    health_percent: float | None,
+    profile_type: str | None,
+    as_of,
+    history: list[tuple],
+    critical_soc_percent: float,
+    min_discharge_power_kw: float,
+) -> PredictionResult:
+    """The real entry point `GET /api/v1/batteries/{battery_id}/prediction`
+    calls: use a loaded ML model if one exists and this battery is in a
+    state where a prediction is even meaningful, otherwise (or if ML
+    doesn't work out) fall back to the physics baseline -- Contract 46's
+    fallback chain, end to end.
+
+    `history`: this battery's telemetry readings strictly before `as_of`,
+    as `(timestamp, state_of_charge, power_kw)` tuples (see
+    `app/services/live_features.py`'s `compute_live_features` for exactly
+    how these get used). Only matters when a model is actually loaded --
+    the pure baseline path below never looks at it.
+    """
+    loaded = model_registry.get_loaded_model()
+
+    if loaded is not None and capacity_kwh is not None and profile_type is not None:
+        if _ml_prediction_could_apply(
+            state_of_charge=state_of_charge,
+            status=status,
+            critical_soc_percent=critical_soc_percent,
+        ):
+            predicted_minutes = _attempt_ml_prediction(
+                loaded,
+                state_of_charge=state_of_charge,  # type: ignore[arg-type]
+                power_kw=power_kw,  # type: ignore[arg-type]
+                temperature_c=temperature_c,
+                health_percent=health_percent,
+                capacity_kwh=capacity_kwh,
+                profile_type=profile_type,
+                as_of=as_of,
+                history=history,
+            )
+            if predicted_minutes is not None:
+                return PredictionResult(
+                    prediction_available=True,
+                    predicted_minutes_to_critical=predicted_minutes,
+                    prediction_method=PREDICTION_METHOD_ML,
+                    model_version=loaded.metadata.get("model_version"),
+                    reason=None,
+                )
+
+    baseline = compute_baseline_prediction(
+        capacity_kwh=capacity_kwh,
+        state_of_charge=state_of_charge,
+        power_kw=power_kw,
+        status=status,
+        critical_soc_percent=critical_soc_percent,
+        min_discharge_power_kw=min_discharge_power_kw,
+    )
+    return PredictionResult(
+        prediction_available=baseline.prediction_available,
+        predicted_minutes_to_critical=baseline.predicted_minutes_to_critical,
+        prediction_method=baseline.prediction_method,
+        model_version=baseline.model_version,
+        reason=baseline.reason,
+    )
