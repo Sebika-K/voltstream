@@ -18,7 +18,7 @@ import logging
 
 from batching import BatchAccumulator
 from battery import Battery
-from client import BackendClient
+from client import BackendClient, BatchDeliveryError
 from config import SimulatorConfig
 from fleet import Fleet, FleetConfig
 from logging_config import configure_logging
@@ -73,7 +73,16 @@ async def run_simulator(
     async def send(events: list[dict]) -> None:
         # The client logs each batch itself (`batch_sent` / `batch_failed`), because
         # it is the one that knows the request ID, status and duration.
-        await client.send_batch(events)
+        try:
+            await client.send_batch(events)
+        except BatchDeliveryError:
+            # Retries ran out (Roadmap 5.3). The client already logged
+            # `batch_dropped` with the details. The simulation stays alive and
+            # carries on with the next batch: one lost batch must not end the run.
+            # (A refusal the backend will never accept -- e.g. 404 -- is NOT caught
+            # here on purpose; that still stops the process loudly, and Docker's
+            # restart re-registers the fleet, which fixes the usual cause.)
+            pass
 
     accumulator = BatchAccumulator(config.batch_size, send)
 
@@ -94,7 +103,7 @@ def main() -> None:
     configure_logging(level=config.log_level, log_format=config.log_format, service="simulator")
 
     async def run() -> None:
-        async with BackendClient(config.backend_url) as client:
+        async with BackendClient(config.backend_url, retry_policy=config.retry_policy) as client:
             await run_simulator(config, client)
 
     asyncio.run(run())

@@ -61,6 +61,9 @@ services:
       BATCH_SIZE: ${BATCH_SIZE:-100}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-json}
+      RETRY_MAX_ATTEMPTS: ${RETRY_MAX_ATTEMPTS:-10}
+      RETRY_BASE_DELAY_SECONDS: ${RETRY_BASE_DELAY_SECONDS:-0.5}
+      RETRY_MAX_DELAY_SECONDS: ${RETRY_MAX_DELAY_SECONDS:-30}
     depends_on:
       backend:
         condition: service_healthy
