@@ -1,0 +1,14 @@
+# Keep the build context small and, more importantly, keep secrets and
+# machine-specific files OUT of the image.
+.env
+*.env
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+tests/
+requirements-dev.txt
+.git/
