@@ -18,8 +18,9 @@ import logging
 
 from batching import BatchAccumulator
 from battery import Battery
-from client import BackendClient, BatchDeliveryError
+from client import BackendClient
 from config import SimulatorConfig
+from delivery import DeliveryQueue
 from fleet import Fleet, FleetConfig
 from logging_config import configure_logging
 
@@ -70,32 +71,44 @@ async def run_simulator(
     await register_fleet(client, fleet.batteries)
     logger.info("fleet_registered", extra={"battery_count": len(fleet.batteries)})
 
-    async def send(events: list[dict]) -> None:
-        # The client logs each batch itself (`batch_sent` / `batch_failed`), because
-        # it is the one that knows the request ID, status and duration.
-        try:
-            await client.send_batch(events)
-        except BatchDeliveryError:
-            # Retries ran out (Roadmap 5.3). The client already logged
-            # `batch_dropped` with the details. The simulation stays alive and
-            # carries on with the next batch: one lost batch must not end the run.
-            # (A refusal the backend will never accept -- e.g. 404 -- is NOT caught
-            # here on purpose; that still stops the process loudly, and Docker's
-            # restart re-registers the fleet, which fixes the usual cause.)
-            pass
-
-    accumulator = BatchAccumulator(config.batch_size, send)
+    # Finished batches go through a bounded queue to a small, fixed set of sender
+    # workers (Roadmap 5.4). When the queue is full the battery handing over a batch
+    # waits, so a slow or down backend slows the simulation instead of piling up
+    # unlimited work in memory. The workers also mean a recovering backend sees at
+    # most `send_workers` requests at a time, not a wall of queued retries.
+    delivery = DeliveryQueue(
+        client.send_batch,
+        max_batches=config.queue_max_batches,
+        workers=config.send_workers,
+    )
+    accumulator = BatchAccumulator(config.batch_size, delivery.submit)
 
     async def on_event(event: dict) -> None:
         await accumulator.add(event)
 
+    delivery.start()
+    fleet_task = asyncio.ensure_future(fleet.run(on_event, max_ticks=max_ticks))
     try:
-        await fleet.run(on_event, max_ticks=max_ticks)
-    finally:
-        # The fleet may stop (cancellation, or a finite max_ticks in a test)
-        # with a partial batch still sitting in the accumulator -- without
-        # this, those last few events would simply never be sent.
+        # The workers only ever finish by failing. If one does (e.g. the backend
+        # refuses our data with a 404), stop the fleet and raise that error, so the
+        # process ends loudly and Docker's restart re-registers the fleet. Otherwise
+        # producers would wait forever on a queue nobody is emptying.
+        done, _ = await asyncio.wait(
+            {fleet_task, *delivery.workers}, return_when=asyncio.FIRST_COMPLETED
+        )
+        if fleet_task in done:
+            fleet_task.result()  # re-raises if the fleet itself failed
+        else:
+            next(iter(done)).result()  # re-raises the worker's error
+
+        # The fleet finished normally (a finite `max_ticks`, as in tests): send the
+        # last partial batch, then wait for everything queued to be delivered.
         await accumulator.flush()
+        await delivery.drain()
+    finally:
+        fleet_task.cancel()
+        await asyncio.gather(fleet_task, return_exceptions=True)
+        await delivery.stop()
 
 
 def main() -> None:

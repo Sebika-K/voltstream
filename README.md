@@ -135,6 +135,7 @@ to source control -- `.env` is gitignored.
 | `CORS_ORIGINS` | backend | Comma-separated browser origins allowed to call the API |
 | `DEVICE_COUNT` / `TELEMETRY_INTERVAL_SECONDS` / `FAULT_RATE` / `RANDOM_SEED` / `BATCH_SIZE` | simulator | Fleet size and behavior (see `.env.example`) |
 | `RETRY_MAX_ATTEMPTS` / `RETRY_BASE_DELAY_SECONDS` / `RETRY_MAX_DELAY_SECONDS` | simulator | Retry with exponential backoff and jitter when the backend is unavailable (defaults 10 / 0.5s / 30s) |
+| `QUEUE_MAX_BATCHES` / `SEND_WORKERS` | simulator | Bounded send queue and number of senders (defaults 20 / 2). When the queue is full the simulated batteries wait, so a slow backend cannot cause unlimited memory growth |
 
 ## Logging
 

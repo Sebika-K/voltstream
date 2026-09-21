@@ -38,6 +38,12 @@ DEFAULT_LOG_LEVEL = "INFO"
 DEFAULT_LOG_FORMAT = "json"
 _VALID_LOG_FORMATS = ("json", "text")
 
+# Roadmap 5.4: backpressure. Finished batches wait in a queue of at most
+# QUEUE_MAX_BATCHES entries; SEND_WORKERS senders empty it. When the queue is full,
+# the batteries handing over batches wait (Contract section 50).
+DEFAULT_QUEUE_MAX_BATCHES = 20
+DEFAULT_SEND_WORKERS = 2
+
 # Roadmap 5.3: retry behavior (defaults live on `RetryPolicy` itself, so there is
 # one source of truth for them).
 _DEFAULT_RETRY = RetryPolicy()
@@ -83,6 +89,8 @@ class SimulatorConfig:
     retry_max_attempts: int = _DEFAULT_RETRY.max_attempts
     retry_base_delay_seconds: float = _DEFAULT_RETRY.base_delay_seconds
     retry_max_delay_seconds: float = _DEFAULT_RETRY.max_delay_seconds
+    queue_max_batches: int = DEFAULT_QUEUE_MAX_BATCHES
+    send_workers: int = DEFAULT_SEND_WORKERS
 
     @property
     def retry_policy(self) -> RetryPolicy:
@@ -126,8 +134,16 @@ class SimulatorConfig:
             retry_max_attempts=retry_max_attempts,
             retry_base_delay_seconds=retry_base_delay,
             retry_max_delay_seconds=retry_max_delay,
+            queue_max_batches=_env_int("QUEUE_MAX_BATCHES", DEFAULT_QUEUE_MAX_BATCHES),
+            send_workers=_env_int("SEND_WORKERS", DEFAULT_SEND_WORKERS),
         )
         # Building the policy validates the three retry values together and fails
         # loudly at startup if they are inconsistent (Contract section 54).
         _ = config.retry_policy
+        for name, value in (
+            ("QUEUE_MAX_BATCHES", config.queue_max_batches),
+            ("SEND_WORKERS", config.send_workers),
+        ):
+            if value < 1:
+                raise ValueError(f"{name} must be at least 1, got {value}")
         return config
