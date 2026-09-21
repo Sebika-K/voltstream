@@ -30,6 +30,12 @@ DEFAULT_BATCH_SIZE = 100  # section 16's "default simulator batch size"
 # container networking contract.
 DEFAULT_BACKEND_URL = "http://localhost:8000"
 
+# Roadmap 5.2: logging. "json" = one JSON object per line (default); "text" = a
+# readable line for running the simulator directly in a terminal.
+DEFAULT_LOG_LEVEL = "INFO"
+DEFAULT_LOG_FORMAT = "json"
+_VALID_LOG_FORMATS = ("json", "text")
+
 
 def _env_int(name: str, default: int) -> int:
     raw = os.environ.get(name)
@@ -66,6 +72,8 @@ class SimulatorConfig:
     random_seed: int | None = DEFAULT_RANDOM_SEED
     batch_size: int = DEFAULT_BATCH_SIZE
     backend_url: str = DEFAULT_BACKEND_URL
+    log_level: str = DEFAULT_LOG_LEVEL
+    log_format: str = DEFAULT_LOG_FORMAT
 
     @classmethod
     def from_env(cls) -> SimulatorConfig:
@@ -75,6 +83,9 @@ class SimulatorConfig:
         section 54: "Invalid configuration MUST cause explicit startup failure
         rather than silent substitution."
         """
+        log_format = os.environ.get("LOG_FORMAT", DEFAULT_LOG_FORMAT)
+        if log_format not in _VALID_LOG_FORMATS:
+            raise ValueError(f"LOG_FORMAT must be one of {_VALID_LOG_FORMATS}, got {log_format!r}")
         random_seed_raw = os.environ.get("RANDOM_SEED")
         random_seed = int(random_seed_raw) if random_seed_raw is not None else DEFAULT_RANDOM_SEED
         return cls(
@@ -86,4 +97,6 @@ class SimulatorConfig:
             random_seed=random_seed,
             batch_size=_env_int("BATCH_SIZE", DEFAULT_BATCH_SIZE),
             backend_url=os.environ.get("BACKEND_URL", DEFAULT_BACKEND_URL),
+            log_level=os.environ.get("LOG_LEVEL", DEFAULT_LOG_LEVEL),
+            log_format=log_format,
         )
