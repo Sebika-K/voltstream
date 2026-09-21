@@ -21,6 +21,8 @@ from app.api.system import router as system_router
 from app.api.telemetry import router as telemetry_router
 from app.core.config import get_settings
 from app.core.errors import APIError, api_error_handler
+from app.core.logging_config import configure_logging
+from app.core.request_context import RequestContextMiddleware
 from app.services import model_registry
 from app.services.offline_detector import run_offline_detection_loop
 from app.services.realtime_publisher import run_fleet_update_publisher
@@ -28,6 +30,9 @@ from app.services.realtime_publisher import run_fleet_update_publisher
 logger = logging.getLogger(__name__)
 
 settings = get_settings()
+
+# Roadmap 5.2: set up structured logging before anything else can log.
+configure_logging(level=settings.LOG_LEVEL, log_format=settings.LOG_FORMAT, service="backend")
 
 
 @contextlib.asynccontextmanager
@@ -86,6 +91,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Added after CORSMiddleware, which makes it the outermost layer: every request
+# (including CORS preflight checks) gets a request ID and a log line.
+app.add_middleware(RequestContextMiddleware)
 
 app.include_router(system_router)
 app.include_router(batteries_router)
