@@ -22,11 +22,12 @@ As of Roadmap 3.3, `mark_stale_batteries_offline` returns the list of
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest_asyncio
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 
 from app.core.config import get_settings
 from app.db.session import async_session_maker
@@ -214,3 +215,50 @@ async def test_new_telemetry_automatically_recovers_an_offline_battery(client):
 
     assert response.status_code in (200, 201)
     assert await _get_status("BAT-900046") == "CHARGING"
+
+
+async def test_a_row_being_changed_elsewhere_is_skipped_not_waited_for():
+    """The deadlock fix (Roadmap 5.3 failure test): the detector must never wait
+    for a row that telemetry ingestion is holding. Simulate ingestion by locking
+    a stale battery's row from another connection, then check the detector
+    returns straight away without touching it -- and picks it up once released."""
+    threshold = get_settings().OFFLINE_THRESHOLD_SECONDS
+    stale = datetime.now(timezone.utc) - timedelta(seconds=threshold * 10)
+    for battery_id in ("BAT-900050", "BAT-900051"):
+        await _register(battery_id)
+        await _set_current_state(battery_id, last_seen=stale, status="DISCHARGING")
+
+    async with async_session_maker() as holder:
+        await holder.execute(
+            select(BatteryCurrentState)
+            .where(BatteryCurrentState.battery_id == "BAT-900050")
+            .with_for_update()
+        )  # this row is now locked, like a request in the middle of an upsert
+
+        async with async_session_maker() as detector:
+            newly_offline = await asyncio.wait_for(
+                mark_stale_batteries_offline(detector), timeout=5
+            )
+
+        assert newly_offline == ["BAT-900051"]  # the locked one was skipped, not waited on
+        await holder.rollback()  # ingestion finishes
+
+    assert await _get_status("BAT-900050") == "DISCHARGING"  # untouched so far
+
+    async with async_session_maker() as session:
+        later = await mark_stale_batteries_offline(session)
+    assert later == ["BAT-900050"]
+    assert await _get_status("BAT-900050") == "OFFLINE"
+
+
+async def test_newly_offline_ids_come_back_in_sorted_order():
+    threshold = get_settings().OFFLINE_THRESHOLD_SECONDS
+    stale = datetime.now(timezone.utc) - timedelta(seconds=threshold * 10)
+    for battery_id in ("BAT-900063", "BAT-900061", "BAT-900062"):  # deliberately unsorted
+        await _register(battery_id)
+        await _set_current_state(battery_id, last_seen=stale, status="CHARGING")
+
+    async with async_session_maker() as session:
+        newly_offline = await mark_stale_batteries_offline(session)
+
+    assert newly_offline == ["BAT-900061", "BAT-900062", "BAT-900063"]
