@@ -1,6 +1,7 @@
 import { Link, useParams } from 'react-router-dom'
 import { useBatteryDetail } from '../hooks/useBatteryDetail'
 import { useBatteryTelemetryHistory } from '../hooks/useBatteryTelemetryHistory'
+import { usePrediction } from '../hooks/usePrediction'
 import { StatGrid } from '../components/StatGrid'
 import type { Stat } from '../components/StatGrid'
 import {
@@ -8,6 +9,8 @@ import {
   formatTemperature,
   formatPower,
   formatDateTimeTwoLine,
+  formatDuration,
+  formatPredictionReason,
 } from '../lib/format'
 
 // Roadmap 2.7: battery detail. `battery_id` comes from the URL
@@ -21,6 +24,7 @@ export function BatteryDetailPage() {
   const { batteryId } = useParams<{ batteryId: string }>()
   const detail = useBatteryDetail(batteryId ?? '')
   const history = useBatteryTelemetryHistory(batteryId ?? '')
+  const prediction = usePrediction(batteryId ?? '')
 
   if (detail.loading) {
     return <p>Loading battery...</p>
@@ -66,6 +70,31 @@ export function BatteryDetailPage() {
 
       <h2>Current state</h2>
       <StatGrid stats={stats} />
+
+      <h2>Depletion prediction</h2>
+      {prediction.loading && <p>Loading prediction...</p>}
+      {prediction.error && <p>Could not load prediction: {prediction.error}</p>}
+      {prediction.data && !prediction.data.prediction_available && (
+        <p>{formatPredictionReason(prediction.data.reason)}</p>
+      )}
+      {prediction.data && prediction.data.prediction_available && (
+        <StatGrid
+          stats={[
+            {
+              label: 'Time to critical charge',
+              value: formatDuration(prediction.data.predicted_minutes_to_critical ?? 0),
+            },
+            {
+              label: 'Estimated critical at',
+              value: formatDateTimeTwoLine(prediction.data.predicted_critical_timestamp ?? ''),
+            },
+            {
+              label: 'Method',
+              value: prediction.data.prediction_method === 'ml' ? 'ML model' : 'Physics baseline',
+            },
+          ]}
+        />
+      )}
 
       <h2>Recent history</h2>
       {history.loading && <p>Loading history...</p>}
