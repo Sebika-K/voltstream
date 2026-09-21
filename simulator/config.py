@@ -14,6 +14,8 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+from retry import RetryPolicy
+
 # Contract section 54's defaults for the variables that matter to the simulator.
 DEFAULT_DEVICE_COUNT = 100
 DEFAULT_TELEMETRY_INTERVAL_SECONDS = 1.0
@@ -35,6 +37,10 @@ DEFAULT_BACKEND_URL = "http://localhost:8000"
 DEFAULT_LOG_LEVEL = "INFO"
 DEFAULT_LOG_FORMAT = "json"
 _VALID_LOG_FORMATS = ("json", "text")
+
+# Roadmap 5.3: retry behavior (defaults live on `RetryPolicy` itself, so there is
+# one source of truth for them).
+_DEFAULT_RETRY = RetryPolicy()
 
 
 def _env_int(name: str, default: int) -> int:
@@ -74,6 +80,19 @@ class SimulatorConfig:
     backend_url: str = DEFAULT_BACKEND_URL
     log_level: str = DEFAULT_LOG_LEVEL
     log_format: str = DEFAULT_LOG_FORMAT
+    retry_max_attempts: int = _DEFAULT_RETRY.max_attempts
+    retry_base_delay_seconds: float = _DEFAULT_RETRY.base_delay_seconds
+    retry_max_delay_seconds: float = _DEFAULT_RETRY.max_delay_seconds
+
+    @property
+    def retry_policy(self) -> RetryPolicy:
+        """The retry settings as a validated `RetryPolicy` (raises ValueError if
+        they are inconsistent, e.g. a max delay smaller than the base delay)."""
+        return RetryPolicy(
+            max_attempts=self.retry_max_attempts,
+            base_delay_seconds=self.retry_base_delay_seconds,
+            max_delay_seconds=self.retry_max_delay_seconds,
+        )
 
     @classmethod
     def from_env(cls) -> SimulatorConfig:
@@ -86,9 +105,14 @@ class SimulatorConfig:
         log_format = os.environ.get("LOG_FORMAT", DEFAULT_LOG_FORMAT)
         if log_format not in _VALID_LOG_FORMATS:
             raise ValueError(f"LOG_FORMAT must be one of {_VALID_LOG_FORMATS}, got {log_format!r}")
+        retry_max_attempts = _env_int("RETRY_MAX_ATTEMPTS", _DEFAULT_RETRY.max_attempts)
+        retry_base_delay = _env_float(
+            "RETRY_BASE_DELAY_SECONDS", _DEFAULT_RETRY.base_delay_seconds
+        )
+        retry_max_delay = _env_float("RETRY_MAX_DELAY_SECONDS", _DEFAULT_RETRY.max_delay_seconds)
         random_seed_raw = os.environ.get("RANDOM_SEED")
         random_seed = int(random_seed_raw) if random_seed_raw is not None else DEFAULT_RANDOM_SEED
-        return cls(
+        config = cls(
             device_count=_env_int("DEVICE_COUNT", DEFAULT_DEVICE_COUNT),
             telemetry_interval_seconds=_env_float(
                 "TELEMETRY_INTERVAL_SECONDS", DEFAULT_TELEMETRY_INTERVAL_SECONDS
@@ -99,4 +123,11 @@ class SimulatorConfig:
             backend_url=os.environ.get("BACKEND_URL", DEFAULT_BACKEND_URL),
             log_level=os.environ.get("LOG_LEVEL", DEFAULT_LOG_LEVEL),
             log_format=log_format,
+            retry_max_attempts=retry_max_attempts,
+            retry_base_delay_seconds=retry_base_delay,
+            retry_max_delay_seconds=retry_max_delay,
         )
+        # Building the policy validates the three retry values together and fails
+        # loudly at startup if they are inconsistent (Contract section 54).
+        _ = config.retry_policy
+        return config
