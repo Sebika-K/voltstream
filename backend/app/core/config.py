@@ -46,6 +46,14 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
     LOG_LEVEL: str = "INFO"
 
+    # Roadmap 5.1: which browser origins may call this API (CORS). Comma-separated.
+    # Defaults cover the Vite dev server (5173) and the containerized frontend (3000).
+    # A string rather than a list because environment variables are plain text.
+    CORS_ORIGINS: str = (
+        "http://localhost:5173,http://127.0.0.1:5173,"
+        "http://localhost:3000,http://127.0.0.1:3000"
+    )
+
     # Database connectivity (required -- see docstring above)
     DATABASE_URL: str
 
