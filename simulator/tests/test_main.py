@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 
 from battery import Battery
+from client import BatchDeliveryError
 from config import SimulatorConfig
 from fleet import build_fleet, FleetConfig
 from main import register_fleet, run_simulator
@@ -98,3 +99,25 @@ def test_run_simulator_with_zero_ticks_still_registers_but_sends_nothing():
 
     assert len(client.registered) == 4
     assert client.batches_sent == []
+
+
+class FlakyClient(FakeClient):
+    """Fails the first batch the way BackendClient does once retries run out."""
+
+    async def send_batch(self, events: list[dict]) -> dict:
+        if not self.batches_sent:
+            self.batches_sent.append(events)
+            raise BatchDeliveryError(event_count=len(events), attempts=3, last_error=RuntimeError("down"))
+        return await super().send_batch(events)
+
+
+def test_a_dropped_batch_does_not_stop_the_simulator():
+    config = SimulatorConfig(
+        device_count=2, telemetry_interval_seconds=0.01, batch_size=2, random_seed=0
+    )
+    client = FlakyClient()
+
+    asyncio.run(run_simulator(config, client, max_ticks=3))
+
+    # The first batch was dropped, yet the other two were still sent.
+    assert len(client.batches_sent) == 3

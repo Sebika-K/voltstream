@@ -14,9 +14,10 @@ import re
 import httpx
 import pytest
 
-from client import BackendClient
+from client import BackendClient, BatchDeliveryError
 from config import SimulatorConfig
 from logging_config import JsonFormatter, TextFormatter, configure_logging
+from retry import RetryPolicy
 
 EVENT = {
     "event_id": "6f1c2d3e-0000-4000-8000-000000000001",
@@ -32,11 +33,14 @@ EVENT = {
 }
 
 
-def client_with_handler(handler) -> BackendClient:
+def client_with_handler(handler, **kwargs) -> BackendClient:
     http_client = httpx.AsyncClient(
         transport=httpx.MockTransport(handler), base_url="http://testserver"
     )
-    return BackendClient("http://testserver", http_client=http_client)
+    return BackendClient("http://testserver", http_client=http_client, **kwargs)
+
+
+ONE_ATTEMPT = RetryPolicy(max_attempts=1)
 
 
 def ok_handler(request: httpx.Request) -> httpx.Response:
@@ -152,7 +156,7 @@ def test_each_batch_gets_its_own_request_id(caplog):
     assert first.request_id != second.request_id
 
 
-def test_an_error_status_is_logged_as_batch_failed_and_still_raises(caplog):
+def test_an_error_status_is_logged_as_batch_failed_then_batch_dropped(caplog):
     caplog.set_level(logging.INFO)
     seen: dict = {}
 
@@ -161,8 +165,8 @@ def test_an_error_status_is_logged_as_batch_failed_and_still_raises(caplog):
         return httpx.Response(503, json={"error": {"code": "DOWN", "message": "db down"}})
 
     async def scenario():
-        client = client_with_handler(handler)
-        with pytest.raises(httpx.HTTPStatusError):
+        client = client_with_handler(handler, retry_policy=ONE_ATTEMPT)
+        with pytest.raises(BatchDeliveryError):
             await client.send_batch([EVENT, EVENT])
         await client.aclose()
 
@@ -175,6 +179,10 @@ def test_an_error_status_is_logged_as_batch_failed_and_still_raises(caplog):
     assert record.event_count == 2
     assert "HTTPStatusError" in record.error
     assert not records(caplog, "batch_sent")
+    (dropped,) = records(caplog, "batch_dropped")
+    assert dropped.levelno == logging.ERROR
+    assert dropped.request_id == seen["request_id"]
+    assert dropped.event_count == 2
 
 
 def test_an_unreachable_backend_is_logged_as_batch_failed_with_no_status(caplog):
@@ -184,8 +192,8 @@ def test_an_unreachable_backend_is_logged_as_batch_failed_with_no_status(caplog)
         raise httpx.ConnectError("connection refused", request=request)
 
     async def scenario():
-        client = client_with_handler(handler)
-        with pytest.raises(httpx.ConnectError):
+        client = client_with_handler(handler, retry_policy=ONE_ATTEMPT)
+        with pytest.raises(BatchDeliveryError):
             await client.send_batch([EVENT])
         await client.aclose()
 

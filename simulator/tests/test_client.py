@@ -16,7 +16,8 @@ import httpx
 import pytest
 
 from battery import Battery, ProfileType
-from client import BackendClient
+from client import BackendClient, BatchDeliveryError
+from retry import RetryPolicy
 
 
 def make_battery(**overrides) -> Battery:
@@ -33,11 +34,11 @@ def make_battery(**overrides) -> Battery:
     return Battery(**defaults)
 
 
-def client_with_handler(handler) -> BackendClient:
+def client_with_handler(handler, **kwargs) -> BackendClient:
     http_client = httpx.AsyncClient(
         transport=httpx.MockTransport(handler), base_url="http://testserver"
     )
-    return BackendClient("http://testserver", http_client=http_client)
+    return BackendClient("http://testserver", http_client=http_client, **kwargs)
 
 
 def test_register_battery_posts_the_expected_payload():
@@ -148,13 +149,16 @@ def test_send_batch_with_no_events_makes_no_request():
     assert result == {"received": 0, "inserted": 0, "duplicates": 0}
 
 
-def test_send_batch_raises_on_a_server_error():
+def test_send_batch_raises_when_a_server_error_exhausts_its_attempts():
+    # 500 is retryable (Roadmap 5.3), so with a single allowed attempt the
+    # failure surfaces as BatchDeliveryError (the retry behaviour itself is
+    # tested in test_client_retry.py).
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(500, json={"error": {"code": "INTERNAL", "message": "boom"}})
 
     async def scenario():
-        client = client_with_handler(handler)
-        with pytest.raises(httpx.HTTPStatusError):
+        client = client_with_handler(handler, retry_policy=RetryPolicy(max_attempts=1))
+        with pytest.raises(BatchDeliveryError):
             await client.send_batch([{"timestamp": datetime.now(timezone.utc)}])
         await client.aclose()
 
