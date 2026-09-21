@@ -35,6 +35,48 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      # The backend image has no curl, so use Python (always present) to call
+      # /ready. Any non-200 answer (e.g. 503 when the database is down) raises,
+      # which makes the check fail. /ready -- not /health -- because "ready"
+      # means the database is reachable too, which is what the simulator needs.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/ready', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  simulator:
+    build:
+      context: ./simulator
+    container_name: voltstream-simulator
+    environment:
+      # Docker DNS name of the backend service -- never localhost between containers.
+      BACKEND_URL: http://backend:8000
+      DEVICE_COUNT: ${DEVICE_COUNT:-100}
+      TELEMETRY_INTERVAL_SECONDS: ${TELEMETRY_INTERVAL_SECONDS:-1}
+      FAULT_RATE: ${FAULT_RATE:-0.0}
+      RANDOM_SEED: ${RANDOM_SEED:-42}
+      BATCH_SIZE: ${BATCH_SIZE:-100}
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # The address the person's BROWSER uses to reach the backend (the
+        # host-published port), not the Docker-internal name.
+        VITE_API_BASE_URL: http://localhost:${BACKEND_PORT:-8000}
+    container_name: voltstream-frontend
+    ports:
+      - "${FRONTEND_PORT:-3000}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:
