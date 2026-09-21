@@ -66,7 +66,7 @@ async def ping_engine(target_engine: AsyncEngine, timeout: float) -> bool:
         await asyncio.wait_for(_probe(), timeout=timeout)
         return True
     except Exception:  # noqa: BLE001 - a readiness probe must never raise
-        logger.warning("Database connectivity check failed", exc_info=True)
+        logger.error("database_unavailable", exc_info=True, extra={"timeout_seconds": timeout})
         return False
 
 
