@@ -64,3 +64,23 @@ def test_an_unparsable_float_value_fails_loudly_rather_than_falling_back(monkeyp
     monkeypatch.setenv("TELEMETRY_INTERVAL_SECONDS", "soon")
     with pytest.raises(ValueError, match="TELEMETRY_INTERVAL_SECONDS"):
         SimulatorConfig.from_env()
+
+
+def test_queue_settings_default_and_can_be_set_from_the_environment(monkeypatch):
+    for name in ("QUEUE_MAX_BATCHES", "SEND_WORKERS"):
+        monkeypatch.delenv(name, raising=False)
+    config = SimulatorConfig.from_env()
+    assert (config.queue_max_batches, config.send_workers) == (20, 2)
+
+    monkeypatch.setenv("QUEUE_MAX_BATCHES", "7")
+    monkeypatch.setenv("SEND_WORKERS", "4")
+    config = SimulatorConfig.from_env()
+    assert (config.queue_max_batches, config.send_workers) == (7, 4)
+
+
+@pytest.mark.parametrize("name", ["QUEUE_MAX_BATCHES", "SEND_WORKERS"])
+@pytest.mark.parametrize("value", ["0", "-1", "lots"])
+def test_invalid_queue_settings_fail_at_startup(monkeypatch, name, value):
+    monkeypatch.setenv(name, value)
+    with pytest.raises(ValueError):
+        SimulatorConfig.from_env()

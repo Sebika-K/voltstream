@@ -12,10 +12,13 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from battery import Battery
 from client import BatchDeliveryError
 from config import SimulatorConfig
 from fleet import build_fleet, FleetConfig
+import main as main_module
 from main import register_fleet, run_simulator
 
 
@@ -121,3 +124,61 @@ def test_a_dropped_batch_does_not_stop_the_simulator():
 
     # The first batch was dropped, yet the other two were still sent.
     assert len(client.batches_sent) == 3
+
+
+def test_a_stuck_backend_cannot_make_the_simulator_pile_up_unlimited_work(monkeypatch):
+    """Roadmap 5.4's "Done When": a slow backend must not cause unlimited growth.
+
+    The client below never finishes a send. Without a bound, the simulation would
+    keep producing events every millisecond. With the bounded queue, producers end
+    up waiting and the number of events ever produced stops growing.
+    """
+    added = 0
+
+    class CountingAccumulator(main_module.BatchAccumulator):
+        async def add(self, event):
+            nonlocal added
+            added += 1
+            await super().add(event)
+
+    monkeypatch.setattr(main_module, "BatchAccumulator", CountingAccumulator)
+
+    class StuckClient(FakeClient):
+        async def send_batch(self, events):
+            await asyncio.Event().wait()  # never returns
+
+    config = SimulatorConfig(
+        device_count=2,
+        telemetry_interval_seconds=0.001,
+        batch_size=2,
+        random_seed=0,
+        queue_max_batches=3,
+        send_workers=1,
+    )
+
+    async def scenario():
+        await asyncio.wait_for(run_simulator(config, StuckClient()), timeout=0.5)
+
+    with pytest.raises(asyncio.TimeoutError):
+        asyncio.run(scenario())
+
+    # Without backpressure this would be ~1000 (2 batteries x ~500 ticks). With it:
+    # 1 batch in flight + 3 queued + 1 held by each of the 2 waiting producers.
+    assert added < 40
+
+
+class RefusingClient(FakeClient):
+    async def send_batch(self, events):
+        raise RuntimeError("backend refused this data")
+
+
+def test_an_error_that_retrying_cannot_fix_still_stops_the_simulator_loudly():
+    config = SimulatorConfig(
+        device_count=2, telemetry_interval_seconds=0.001, batch_size=2, random_seed=0
+    )
+
+    async def scenario():
+        await asyncio.wait_for(run_simulator(config, RefusingClient()), timeout=5)
+
+    with pytest.raises(RuntimeError, match="refused"):
+        asyncio.run(scenario())
