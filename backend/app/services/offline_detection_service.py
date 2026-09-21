@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import datetime
 
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
@@ -34,9 +34,10 @@ async def mark_stale_batteries_offline(session: AsyncSession) -> list[str]:
     """Flip every battery whose `last_seen` is older than the configured
     threshold to `status="OFFLINE"` (Contract section 22).
 
-    One bulk `UPDATE ... WHERE ...` rather than loading rows into Python and
-    writing them back one at a time -- the same "let the database do the
-    aggregate work" approach `get_fleet_summary` (Roadmap 2.4) already uses.
+    Two set-based statements (select-and-lock the stale rows, then update them)
+    rather than loading rows into Python and writing them back one at a time --
+    the same "let the database do the work" approach `get_fleet_summary`
+    (Roadmap 2.4) already uses.
     The `WHERE status != 'OFFLINE'` half of the filter is what makes this
     safe to call repeatedly (every few seconds, per the background loop that
     calls it): a battery that's already marked OFFLINE is left alone rather
@@ -45,8 +46,8 @@ async def mark_stale_batteries_offline(session: AsyncSession) -> list[str]:
     section 21) simply isn't matched by this `UPDATE` -- there's no row to
     flip, and none is fabricated.
 
-    Returns the `battery_id`s newly marked offline this call (via a
-    `RETURNING` clause on the same bulk `UPDATE` -- no second query) --
+    Returns the `battery_id`s newly marked offline this call, sorted (via a
+    `RETURNING` clause on the `UPDATE`) --
     empty on a perfectly normal, fully-online fleet. As of Roadmap 3.3, the
     caller (`app/services/offline_detector.py`) needs these ids, not just a
     count, to raise a `DEVICE_OFFLINE` alert for each one.
@@ -56,14 +57,37 @@ async def mark_stale_batteries_offline(session: AsyncSession) -> list[str]:
         seconds=settings.OFFLINE_THRESHOLD_SECONDS
     )
 
-    statement = (
-        update(BatteryCurrentState)
+    # Step 1: pick the stale batteries AND lock their rows, in battery_id order.
+    #
+    # `SKIP LOCKED` means "ignore any row someone else is changing right now". That
+    # is both safe and correct here: a row being changed by telemetry ingestion
+    # belongs to a battery that is reporting at this very moment, so it is not
+    # offline. It also removes the deadlock the Roadmap 5.3 failure test found: a
+    # plain bulk UPDATE locks rows in whatever order the database scans them, while
+    # ingestion locks them in sorted order, so after a backend restart the two could
+    # each hold a row the other needed. This query never waits for a lock, and a
+    # deadlock needs someone to wait.
+    select_statement = (
+        select(BatteryCurrentState.battery_id)
         .where(BatteryCurrentState.status != OFFLINE_STATUS)
         .where(BatteryCurrentState.last_seen < cutoff)
-        .values(status=OFFLINE_STATUS)
-        .returning(BatteryCurrentState.battery_id)
+        .order_by(BatteryCurrentState.battery_id)
+        .with_for_update(skip_locked=True)
     )
-    result = await session.execute(statement)
-    newly_offline_ids = list(result.scalars().all())
+    stale_ids = list((await session.execute(select_statement)).scalars().all())
+
+    # Step 2: flip exactly those (already locked) rows.
+    newly_offline_ids: list[str] = []
+    if stale_ids:
+        update_statement = (
+            update(BatteryCurrentState)
+            .where(BatteryCurrentState.battery_id.in_(stale_ids))
+            .values(status=OFFLINE_STATUS)
+            .returning(BatteryCurrentState.battery_id)
+        )
+        result = await session.execute(update_statement)
+        # Sorted, so the alert-creation step that follows also touches rows in a
+        # consistent order.
+        newly_offline_ids = sorted(result.scalars().all())
     await session.commit()
     return newly_offline_ids
