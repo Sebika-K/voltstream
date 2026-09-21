@@ -84,6 +84,18 @@ async def _upsert_current_state(
     if not latest_per_battery:
         return latest_per_battery
 
+    # Always work through the batteries in the same order (sorted by ID).
+    #
+    # Two requests can update the same battery rows at the same moment. Each
+    # UPDATE locks the row it touches until its transaction commits. If request A
+    # locks battery 1 then 2, while request B locks 2 then 1, each waits for the
+    # other forever -- a deadlock, and PostgreSQL kills one of them (a 500 for the
+    # caller). When every request locks rows in the same order, the second one
+    # simply waits its turn and no circle can form. The rules and alert-resolution
+    # steps that run after this iterate this same dict, so they lock in the same
+    # order too.
+    latest_per_battery = dict(sorted(latest_per_battery.items()))
+
     upsert_statement = pg_insert(BatteryCurrentState).values(
         [
             {
