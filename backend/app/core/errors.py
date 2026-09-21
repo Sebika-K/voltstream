@@ -23,6 +23,8 @@ import logging
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import InterfaceError, OperationalError
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 
 logger = logging.getLogger(__name__)
 
@@ -57,4 +59,49 @@ async def api_error_handler(request: Request, exc: APIError) -> JSONResponse:
     return JSONResponse(
         status_code=exc.status_code,
         content={"error": {"code": exc.code, "message": exc.message}},
+    )
+
+
+# The ways the database can be "temporarily not there" from a request's point of view
+# (Contract section 51: this must be a controlled 503, not an unhandled 500):
+#   * PoolTimeoutError -- every pooled connection was busy and none freed up in time
+#     (overload; this is what filled the logs during the Roadmap 5.3 failure test);
+#   * OperationalError / InterfaceError -- the connection broke or could not be used;
+# Python's plain ConnectionError is deliberately left out: it is also what a browser
+# closing a live stream looks like, and that must not be reported as a database outage.
+# A genuine bug (bad SQL, a constraint violation, a deadlock) is deliberately NOT in
+# this list: that is a real server error and should still be a 500.
+DATABASE_UNAVAILABLE_ERRORS: tuple[type[Exception], ...] = (
+    PoolTimeoutError,
+    OperationalError,
+    InterfaceError,
+)
+
+
+async def database_unavailable_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Turn "the database is overloaded or unreachable" into a clean 503.
+
+    503 tells the caller "the server is fine, but temporarily can't serve this --
+    try again later", which is exactly what a retrying client like the simulator
+    should hear. The response never includes the database's own error text (it can
+    contain hostnames and SQL); that goes to the log only.
+    """
+    logger.error(
+        "database_unavailable_for_request",
+        extra={
+            "method": request.method,
+            "path": request.url.path,
+            "status_code": 503,
+            "error_code": "DATABASE_UNAVAILABLE",
+            "error": f"{type(exc).__name__}",
+        },
+    )
+    return JSONResponse(
+        status_code=503,
+        content={
+            "error": {
+                "code": "DATABASE_UNAVAILABLE",
+                "message": "The database is temporarily unavailable. Please try again shortly.",
+            }
+        },
     )

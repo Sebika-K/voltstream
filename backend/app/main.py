@@ -20,7 +20,12 @@ from app.api.stream import router as stream_router
 from app.api.system import router as system_router
 from app.api.telemetry import router as telemetry_router
 from app.core.config import get_settings
-from app.core.errors import APIError, api_error_handler
+from app.core.errors import (
+    DATABASE_UNAVAILABLE_ERRORS,
+    APIError,
+    api_error_handler,
+    database_unavailable_handler,
+)
 from app.core.logging_config import configure_logging
 from app.core.request_context import RequestContextMiddleware
 from app.services import model_registry
@@ -107,3 +112,8 @@ app.include_router(alerts_router)
 # the Contract's {"error": {"code", "message"}} envelope automatically -- see
 # app/core/errors.py for why this exists instead of using HTTPException.
 app.add_exception_handler(APIError, api_error_handler)
+
+# Database overloaded or unreachable -> a controlled 503 instead of an unhandled 500
+# (Contract section 51). See app/core/errors.py for exactly which errors count.
+for _db_error in DATABASE_UNAVAILABLE_ERRORS:
+    app.add_exception_handler(_db_error, database_unavailable_handler)
