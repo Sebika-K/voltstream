@@ -4,12 +4,12 @@ A production-inspired real-time telemetry and predictive monitoring platform for
 simulated fleet of smart batteries. See the project documents (`docs/` and the attached
 Product/Technical/Implementation/Roadmap specs) for the full system design.
 
-**Current status: project foundation only.** This repository currently implements the
-Phase 0 foundation from the development roadmap: repository scaffolding, a FastAPI
-application with liveness/readiness endpoints, and a PostgreSQL database configured
-through Docker Compose with async SQLAlchemy + Alembic wired up. Battery registration,
-telemetry ingestion, the simulator, the frontend, real-time delivery, alerts, and ML
-prediction are **not** implemented yet -- they follow in later phases.
+**Current status:** the full MVP works end to end -- a simulated fleet of batteries
+sends telemetry to a FastAPI backend, which stores it in PostgreSQL, serves current-state,
+history and fleet-analytics APIs, streams live updates and anomaly alerts to a React
+dashboard, and predicts time-to-critical-charge (physics baseline; see the ML evaluation
+notes). Phase 5 (reliability and containerization) is in progress: everything now runs
+in Docker Compose.
 
 ---
 
@@ -44,31 +44,45 @@ voltstream/
 
 ## Quick start (Docker Compose)
 
+From a clean machine with Docker installed:
+
 ```bash
 cp .env.example .env
 # edit .env and set a real POSTGRES_PASSWORD
 
-docker compose up --build
+docker compose up --build -d
 ```
 
-This starts PostgreSQL (with a persistent named volume and a health check) and the
-FastAPI backend, which waits for PostgreSQL to report healthy before starting.
+This builds and starts four services, in dependency order (each waits for the previous
+one's health check to pass):
 
-Once running:
+| Service | What it is | Where |
+|---|---|---|
+| `postgres` | PostgreSQL 16 with a persistent named volume | `localhost:5432` |
+| `backend` | FastAPI API. Applies database migrations automatically on startup | `localhost:8000` |
+| `simulator` | Simulated battery fleet (default 100 devices) sending telemetry to the backend | (no port) |
+| `frontend` | React dashboard served by nginx | `localhost:3000` |
+
+Then open the dashboard at **http://localhost:3000**.
+
+Useful commands:
 
 ```bash
-curl http://localhost:8000/health
-# {"status":"ok"}
+docker compose ps                       # status and health of every service
+docker compose logs -f simulator        # watch telemetry being sent (or: backend, frontend, postgres)
+curl http://localhost:8000/ready        # {"status":"ready","database":"connected"}
+open http://localhost:8000/docs         # interactive API docs
 
-curl http://localhost:8000/ready
-# {"status":"ready","database":"connected"}
-
-# Interactive API docs
-open http://localhost:8000/docs
+docker compose down                     # stop everything, keep the database data
+docker compose down -v                  # stop everything AND delete the database volume
 ```
 
-Stop everything with `docker compose down` (add `-v` to also remove the Postgres data
-volume).
+After changing code, `docker compose up --build -d` rebuilds and restarts what changed.
+
+Note: the frontend image bakes in the address the browser uses to reach the backend
+(`http://localhost:8000` by default, from `BACKEND_PORT`), so if you publish the backend
+on a different host or port, rebuild the frontend and add the frontend's address to
+`CORS_ORIGINS`.
 
 ## Running the backend locally without Docker
 
@@ -117,6 +131,9 @@ to source control -- `.env` is gitignored.
 | `BACKEND_PORT` | docker-compose | Host port the backend is published on |
 | `ENVIRONMENT` | backend | Free-form environment label (`development`, etc.) |
 | `LOG_LEVEL` | backend | Logging verbosity |
+| `FRONTEND_PORT` | docker-compose | Host port the dashboard is published on (default 3000) |
+| `CORS_ORIGINS` | backend | Comma-separated browser origins allowed to call the API |
+| `DEVICE_COUNT` / `TELEMETRY_INTERVAL_SECONDS` / `FAULT_RATE` / `RANDOM_SEED` / `BATCH_SIZE` | simulator | Fleet size and behavior (see `.env.example`) |
 
 ## API (implemented so far)
 
