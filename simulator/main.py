@@ -21,6 +21,7 @@ from battery import Battery
 from client import BackendClient
 from config import SimulatorConfig
 from fleet import Fleet, FleetConfig
+from logging_config import configure_logging
 
 logger = logging.getLogger("simulator")
 
@@ -36,7 +37,10 @@ async def register_fleet(client: BackendClient, batteries: list[Battery]) -> Non
     """
     for battery in batteries:
         await client.register_battery(battery)
-        logger.info("registered %s (%s)", battery.battery_id, battery.profile_type.value)
+        logger.info(
+            "battery_registered",
+            extra={"battery_id": battery.battery_id, "profile_type": battery.profile_type.value},
+        )
 
 
 async def run_simulator(
@@ -64,18 +68,14 @@ async def run_simulator(
     fleet = Fleet(fleet_config)
 
     await register_fleet(client, fleet.batteries)
-    logger.info("registered %d batteries, starting telemetry", len(fleet.batteries))
+    logger.info("fleet_registered", extra={"battery_count": len(fleet.batteries)})
 
-    async def send_and_log(events: list[dict]) -> None:
-        result = await client.send_batch(events)
-        logger.info(
-            "batch sent: received=%d inserted=%d duplicates=%d",
-            result["received"],
-            result["inserted"],
-            result["duplicates"],
-        )
+    async def send(events: list[dict]) -> None:
+        # The client logs each batch itself (`batch_sent` / `batch_failed`), because
+        # it is the one that knows the request ID, status and duration.
+        await client.send_batch(events)
 
-    accumulator = BatchAccumulator(config.batch_size, send_and_log)
+    accumulator = BatchAccumulator(config.batch_size, send)
 
     async def on_event(event: dict) -> None:
         await accumulator.add(event)
@@ -90,8 +90,8 @@ async def run_simulator(
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     config = SimulatorConfig.from_env()
+    configure_logging(level=config.log_level, log_format=config.log_format, service="simulator")
 
     async def run() -> None:
         async with BackendClient(config.backend_url) as client:
