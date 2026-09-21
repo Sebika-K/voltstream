@@ -23,6 +23,8 @@ for why that's deliberately deferred.
 from __future__ import annotations
 
 import datetime
+import logging
+import time
 from collections.abc import Iterable
 
 from sqlalchemy import select
@@ -39,6 +41,8 @@ from app.services.anomaly_detection_service import (
     evaluate_rules_for_events,
     resolve_alert_if_active,
 )
+
+logger = logging.getLogger(__name__)
 
 
 async def _upsert_current_state(
@@ -192,6 +196,11 @@ async def ingest_telemetry_event(session: AsyncSession, event: TelemetryEvent) -
     # the whole transaction rolls back and neither table changes (Contract
     # section 19).
     await session.commit()
+
+    logger.info(
+        "telemetry_ingested" if created else "telemetry_duplicate_ignored",
+        extra={"battery_id": event.battery_id, "event_id": str(event.event_id)},
+    )
     return created
 
 
@@ -213,6 +222,7 @@ async def ingest_telemetry_batch(
     request, so a failure before commit must roll back everything, not just
     the offending event).
     """
+    started = time.perf_counter()
     battery_ids = {event.battery_id for event in batch.events}
     # Full Battery rows, not just IDs -- Roadmap 3.3's voltage-anomaly rule
     # needs each battery's nominal_voltage, and fetching it here (once, for
@@ -279,6 +289,19 @@ async def ingest_telemetry_batch(
     await session.commit()
 
     duplicates = len(batch.events) - inserted
+    # Contract section 52's own example event. `duration_ms` here is the time spent
+    # inside the ingestion service (checks + insert + commit); the request-level
+    # `request_completed` line carries the total time including HTTP handling.
+    logger.info(
+        "telemetry_batch_processed",
+        extra={
+            "received": len(batch.events),
+            "inserted": inserted,
+            "duplicates": duplicates,
+            "battery_count": len(battery_ids),
+            "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+        },
+    )
     return inserted, duplicates
 
 
