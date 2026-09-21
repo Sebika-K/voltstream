@@ -78,14 +78,11 @@ app = FastAPI(title=settings.APP_NAME, lifespan=lifespan)
 # (http://localhost:5173) than the backend (http://localhost:8000). Browsers
 # block cross-origin fetch()/XHR requests by default unless the server opts
 # in via CORS headers -- this is a browser security rule, not a backend bug.
-# Scoped to the known local dev-server origins only; this will need revisiting
-# once the frontend is deployed somewhere with a real origin (Roadmap 5.1).
+# Scoped to an explicit allow-list (settings.CORS_ORIGINS, configurable per
+# environment) rather than "*".
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ],
+    allow_origins=[o.strip() for o in settings.CORS_ORIGINS.split(",") if o.strip()],
     allow_methods=["*"],
     allow_headers=["*"],
 )
