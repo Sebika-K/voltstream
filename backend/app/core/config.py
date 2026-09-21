@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path as _Path
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -45,6 +46,10 @@ class Settings(BaseSettings):
     APP_NAME: str = "VoltStream Backend"
     ENVIRONMENT: str = "development"
     LOG_LEVEL: str = "INFO"
+    # Roadmap 5.2: "json" = one JSON object per log line (default; what Docker and
+    # anything that parses logs wants). "text" = a readable line for local development.
+    # Anything else is rejected at startup rather than silently ignored.
+    LOG_FORMAT: Literal["json", "text"] = "json"
 
     # Roadmap 5.1: which browser origins may call this API (CORS). Comma-separated.
     # Defaults cover the Vite dev server (5173) and the containerized frontend (3000).
