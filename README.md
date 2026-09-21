@@ -135,6 +135,43 @@ to source control -- `.env` is gitignored.
 | `CORS_ORIGINS` | backend | Comma-separated browser origins allowed to call the API |
 | `DEVICE_COUNT` / `TELEMETRY_INTERVAL_SECONDS` / `FAULT_RATE` / `RANDOM_SEED` / `BATCH_SIZE` | simulator | Fleet size and behavior (see `.env.example`) |
 
+## Logging
+
+Both the backend and the simulator write **structured logs**: one JSON object per line
+on standard output, with the same core fields so one tool can read both.
+
+```json
+{"timestamp": "2026-09-21T16:43:59.266Z", "level": "INFO", "service": "backend",
+ "event": "telemetry_batch_processed", "request_id": "1fe4bed2...", "received": 100,
+ "inserted": 100, "duplicates": 0, "battery_count": 99, "duration_ms": 165.41}
+```
+
+| Setting | Effect |
+|---|---|
+| `LOG_LEVEL` | `DEBUG`, `INFO` (default), `WARNING`, `ERROR`. An unknown value stops startup. |
+| `LOG_FORMAT` | `json` (default) or `text` (one readable line, nicer in a terminal). |
+
+Key events:
+
+| Service | Event | Meaning |
+|---|---|---|
+| backend | `request_completed` / `request_failed` | One per HTTP request: method, path, status, `duration_ms` (health checks log at DEBUG) |
+| backend | `telemetry_batch_processed` | Counts of events received / inserted / duplicates for one batch |
+| backend | `telemetry_ingested`, `telemetry_duplicate_ignored` | Single-event ingestion, with `battery_id` and `event_id` |
+| backend | `battery_registered` | A new battery was registered |
+| backend | `request_rejected` | A business-rule refusal (unknown battery, conflicting registration, oversized batch), with `error_code` and a message naming the battery |
+| backend | `database_unavailable` | The database check failed (error level, with the underlying exception) |
+| simulator | `batch_sent` / `batch_failed` | One per batch POST, with the same `request_id` the backend logs |
+
+**Request IDs.** Every backend response carries an `X-Request-ID` header, and the simulator
+sends its own per batch, so a single ID follows a batch across both services:
+
+```bash
+docker compose logs simulator backend | grep <request_id>
+```
+
+Logs never contain secrets (no connection strings or passwords are logged).
+
 ## API (implemented so far)
 
 | Method | Path | Purpose |

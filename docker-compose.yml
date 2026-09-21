@@ -59,6 +59,8 @@ services:
       FAULT_RATE: ${FAULT_RATE:-0.0}
       RANDOM_SEED: ${RANDOM_SEED:-42}
       BATCH_SIZE: ${BATCH_SIZE:-100}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
     depends_on:
       backend:
         condition: service_healthy
