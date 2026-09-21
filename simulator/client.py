@@ -13,12 +13,17 @@ to the backend for the first time."
 
 from __future__ import annotations
 
+import logging
+import time
+import uuid
 from datetime import datetime
 from typing import Any
 
 import httpx
 
 from battery import Battery
+
+logger = logging.getLogger("simulator.client")
 
 
 def _event_to_json_safe(event: dict[str, Any]) -> dict[str, Any]:
@@ -113,6 +118,48 @@ class BackendClient:
         if not events:
             return {"received": 0, "inserted": 0, "duplicates": 0}
         payload = {"events": [_event_to_json_safe(event) for event in events]}
-        response = await self._client.post("/api/v1/telemetry/batch", json=payload)
-        response.raise_for_status()
-        return response.json()
+
+        # Roadmap 5.2: this batch's ID, sent as `X-Request-ID`. The backend reuses a
+        # well-formed incoming ID, so the same value appears in this service's
+        # `batch_sent` line AND in the backend's `request_completed` /
+        # `telemetry_batch_processed` lines -- searching the logs for one ID follows
+        # the batch from simulator to database and back.
+        request_id = uuid.uuid4().hex
+        started = time.perf_counter()
+        try:
+            response = await self._client.post(
+                "/api/v1/telemetry/batch", json=payload, headers={"X-Request-ID": request_id}
+            )
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            # Covers both "the backend answered with an error status" and "the
+            # backend couldn't be reached at all". Logged here, then re-raised
+            # unchanged: this step only makes failures visible -- surviving them
+            # (retry with backoff) is Roadmap 5.3.
+            logger.error(
+                "batch_failed",
+                extra={
+                    "request_id": request_id,
+                    "event_count": len(events),
+                    "status_code": (
+                        exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
+                    ),
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+                },
+            )
+            raise
+
+        result = response.json()
+        logger.info(
+            "batch_sent",
+            extra={
+                "request_id": request_id,
+                "status_code": response.status_code,
+                "received": result["received"],
+                "inserted": result["inserted"],
+                "duplicates": result["duplicates"],
+                "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+            },
+        )
+        return result
