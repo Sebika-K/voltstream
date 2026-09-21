@@ -10,6 +10,7 @@ reused, e.g. by a future admin script) without spinning up the web layer.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 
 from sqlalchemy import func, select
@@ -19,6 +20,8 @@ from app.core.errors import APIError
 from app.models.battery import Battery
 from app.models.battery_current_state import BatteryCurrentState
 from app.schemas.battery import BatteryRegistrationRequest
+
+logger = logging.getLogger(__name__)
 
 # The registration fields the Contract calls "immutable battery
 # identity/configuration" -- everything from the request except battery_id
@@ -56,6 +59,9 @@ async def register_battery(
 
     if existing is not None:
         if _matches_existing(existing, request):
+            # DEBUG, not INFO: every simulator restart re-registers the whole fleet,
+            # and 100 identical "nothing changed" lines would bury the useful ones.
+            logger.debug("battery_registration_repeated", extra={"battery_id": request.battery_id})
             return existing, False
         raise APIError(
             status_code=409,
@@ -80,6 +86,10 @@ async def register_battery(
     session.add(battery)
     await session.commit()
     await session.refresh(battery)
+    logger.info(
+        "battery_registered",
+        extra={"battery_id": battery.battery_id, "profile_type": str(battery.profile_type)},
+    )
     return battery, True
 
 
