@@ -1,8 +1,13 @@
-// Base URL for the backend API. Hardcoded to the local dev backend for now --
-// this becomes a Vite environment variable (import.meta.env) once the
-// frontend needs to point anywhere other than localhost (Roadmap 5.1,
-// containerization).
-export const API_BASE_URL = 'http://localhost:8000'
+// Base URL for the backend API, as the *browser* sees it. Set at build time via
+// the VITE_API_BASE_URL environment variable (Vite bakes it into the built
+// JavaScript). Falls back to the local dev backend when it isn't set, so
+// `npm run dev` keeps working with no configuration.
+//
+// Note this is a URL the person's browser can reach (http://localhost:8000 --
+// the port Docker publishes on the host), NOT the Docker-internal name
+// http://backend:8000, which only other containers can resolve.
+export const API_BASE_URL: string =
+  import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
 
 export class ApiError extends Error {
   status: number
