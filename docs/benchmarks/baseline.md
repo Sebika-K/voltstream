@@ -66,3 +66,65 @@ Two of the roadmap's suggested areas to investigate can already be narrowed down
 ## 6.2 status
 
 **Done.** The harness produced a real, reproducible curve across five load levels with zero request failures throughout, and the ladder was stopped once further escalation would have just repeated the same plateau pattern rather than surfacing anything new — matching the roadmap's own stopping condition ("stop when machine/environment limits make further testing meaningless").
+
+## 6.3 Bottleneck Analysis
+
+**Roadmap item:** 6.3 Bottleneck Analysis (Phase 6 — Performance Engineering)
+**Date:** 2026-09-24
+
+### Method
+
+Building on the two open leads from 6.2 (connection pool ruled out; current-state upsert and worker count still suspect), two checks were run against the same 10-user / 30-second load level used throughout the baseline: how many Uvicorn worker processes the backend actually runs, and what the backend's database connections are actually waiting on while a load test is in flight (via Postgres's own `pg_stat_activity`), cross-checked against the backend's own structured logs for how long it reports spending on each batch.
+
+### Finding 1 — single Uvicorn worker
+
+The backend's entrypoint (`backend/docker-entrypoint.sh`) starts it with `exec uvicorn app.main:app --host 0.0.0.0 --port 8000` — no `--workers` flag anywhere in the Dockerfile, entrypoint script, or compose file. Uvicorn defaults to a single worker process when none is specified, so the entire backend runs as one process handling every request. (`SEND_WORKERS` in the compose file is unrelated — that's the simulator's own sender-pool setting from Phase 5.4, not the backend's.)
+
+### Finding 2 — the backend's own reported processing time is itself huge
+
+Tailing the backend's structured logs (`docker compose logs -f backend | grep telemetry_batch_processed`) during a load test showed `duration_ms` values as high as 44,842ms, 47,617ms, and 56,344ms for a single 100-event batch — the backend's own internal timer, not client-observed latency. This rules out a simple "requests queue outside the backend before any work starts" explanation: if that were the whole story, the reported processing time would stay close to the original ~165-178ms trace from Phase 5.2 once a request actually began executing. Instead, the slowness is happening inside the measured work itself.
+
+### Finding 3 — direct confirmation via `pg_stat_activity`
+
+Querying Postgres's own activity view during a fresh 10-user run showed the mechanism directly. Repeated snapshots showed multiple backend sessions simultaneously `active`, `wait_event_type = Lock`, `wait_event = transactionid`, all running the same statement: `INSERT INTO battery_current_state (...)`. The same sessions were tracked growing older across consecutive snapshots taken a few seconds apart (one session's wait grew from 6.9s -> 14.4s -> 18.9s across three snapshots), confirming a real, growing backlog rather than a transient blip.
+
+A second detail explains why the wait keeps growing instead of staying short: some sessions showed `idle in transaction` while sitting on a `SELECT ... FROM alerts` query in the same session — meaning the code holds the same open transaction, and the row locks that come with it, across both the `battery_current_state` upsert and subsequent alert-related work, rather than releasing the lock as soon as the upsert itself finishes. With `alerts` now holding 213,000+ rows (see 6.2's caveat about the harness's synthetic data over-triggering alerts), that alert-related work inside the same transaction is itself slow, which stretches out exactly how long every other concurrent request touching the same battery rows has to wait.
+
+### Conclusion
+
+**The bottleneck is row-lock contention on `battery_current_state`, caused by the current-state upsert holding its transaction — and the row locks that come with it — open across more work than the upsert itself needs**, specifically alert-related work against a now-oversized `alerts` table. Any two concurrent requests that happen to touch even one of the same battery rows (not rare with the pool sizes and concurrency used in this investigation) queue behind each other for the full duration of that combined transaction, not just the brief moment of the actual row update. This explains every pattern observed in 6.2: the flat throughput ceiling regardless of concurrency (only one transaction per contended row can make progress at a time), the near-linear latency growth with concurrency (each additional contending request adds another full transaction's wait to the queue), and the complete absence of connection-pool timeouts even past 35 seconds of wait (the connections aren't waiting for a free slot in the pool — they already have one, and are waiting on a Postgres-level lock while holding it).
+
+The single Uvicorn worker and the connection pool are both real, verified facts about the system, but neither is the primary driver here — a single worker can still run many requests concurrently as long as they are genuinely waiting on I/O rather than on each other, and the pool never actually ran out across any run in this investigation. The lock contention is what is actually gating throughput.
+
+### 6.3 status
+
+**Done.** A bottleneck was identified from direct measurement — `pg_stat_activity` catching multiple sessions queued on the same lock, growing older in real time, tied to a specific query — rather than from assumption. Ready for 6.4 to test a fix against this same baseline. A leading candidate: keep alert evaluation and alert writes out of the same transaction as the current-state upsert, so the row lock is held only as long as the upsert itself takes.
+
+## 6.4 Fix Verification
+
+**Roadmap item:** 6.4 Fix Verification (Phase 6 — Performance Engineering)
+**Date:** 2026-09-24
+
+### The fix
+
+Following 6.3's leading candidate directly: `telemetry_service.py`'s ingestion path now commits the `telemetry` insert and `battery_current_state` upsert on their own, before alert evaluation runs, instead of holding one open transaction across both. This shrinks the row-lock hold window from "however long the whole rule pass takes" down to "however long the upsert itself takes" — the row locks that were being held across the slow, now-oversized `alerts` table work are released as soon as current-state is written. Trade-off, accepted deliberately: telemetry storage and alert evaluation are no longer atomic with each other. If rule evaluation fails after the commit, the battery's telemetry and current-state are already saved rather than rolled back — judged better than losing real device data over a rule bug, and not a permanent gap, since the next reading for the same battery evaluates the same rules again against its own newest state.
+
+### Bug found while testing the fix: `create_or_retain_alert` race condition
+
+Shortening the lock window made an existing, previously-latent bug in `anomaly_detection_service.py::create_or_retain_alert` much easier to hit: it was a check-then-insert (SELECT for an unresolved alert, then either UPDATE or INSERT), not atomic. Two concurrent callers for the same `battery_id` + `alert_type` — a burst of alert-triggering events for one battery, or this rule-evaluation path racing the offline-detector's `DEVICE_OFFLINE` path through the same shared helper — could both see "no unresolved alert yet" and both attempt an INSERT, and the second would violate the partial unique index (`ux_alerts_battery_id_alert_type_unresolved`) and raise instead of retaining.
+
+Fixed the same way Phase 5 fixed the equivalent `battery_current_state` problem: a single atomic `INSERT ... ON CONFLICT (battery_id, alert_type) ... DO UPDATE`, conflict target scoped to unresolved rows only (`index_where`), updating only `severity`/`message`/`measured_value`/`threshold_value` so `alert_id` and the original incident `timestamp` stay untouched on retain — unchanged behavior from before, just race-free.
+
+One follow-up bug surfaced by actually running this against Postgres (not caught by the sandbox's `py_compile`-only check): the index's own predicate is `resolved = false` (an equality op), but SQLAlchemy's `Alert.resolved.is_(False)` compiled the conflict clause as `resolved IS false` (a boolean test). Postgres requires the ON CONFLICT predicate to structurally match the index predicate to infer a conflict target, and does not treat those two forms as equivalent for that purpose, even though they're semantically identical — every write failed with "there is no unique or exclusion constraint matching the ON CONFLICT specification" until `index_where` was given as raw SQL text (`resolved = false`) matching the index definition exactly.
+
+### Verification
+
+1. **Full backend test suite: 218/218 passed** (`pytest -v`), including a new concurrency test (`test_concurrent_low_soc_events_for_one_battery_retain_a_single_alert`, `tests/test_anomaly_detection.py`) that fires 20 concurrent LOW_SOC-triggering requests at the same battery and asserts exactly one alert survives.
+2. **Live load test, same shape that originally broke it:** 20 users / 60s against the rebuilt backend, simulator stopped. 268 requests, 0 failures. No `ON CONFLICT`/`IntegrityError` traces anywhere in the backend log.
+3. **The second race path confirmed live, not just in theory:** the offline detector fired mid-run (`Marked 200 battery(s) offline`) while load-test batches were still landing — the exact "rule-evaluation path racing the offline-detector's DEVICE_OFFLINE path through the same helper" scenario the fix targets — and completed without error.
+4. One unrelated `database_unavailable` ERROR appeared once in that run (a `TimeoutError` on the `/ready` healthcheck's own connection-pool probe, 20 users against the pool's 15 connections). This is the Phase 5 controlled-503-under-pool-exhaustion behavior (`core/errors.py`) working as designed, not the bug this item was verifying — flagged here as a separate thread for whenever Phase 6 performance work continues, not a 6.4 finding.
+
+### 6.4 status
+
+**Done.** The 6.3 root cause (lock held across alert-related work) is fixed, and fixing it surfaced and closed a second, previously-latent bug (`create_or_retain_alert`'s non-atomic check-then-insert) that shortening the lock window made much easier to trigger. Verified at three levels: unit/integration tests, a live load test at the same concurrency that originally produced the failures, and a live reproduction of the specific dual-path race (telemetry rules vs. offline detector) the fix targets.
+
