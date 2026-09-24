@@ -30,7 +30,8 @@ import datetime
 import uuid
 from collections.abc import Iterable
 
-from sqlalchemy import select
+from sqlalchemy import select, text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
@@ -91,29 +92,56 @@ async def create_or_retain_alert(
     `alert_id`, get created -- which is also what makes a *recurrence* after
     a previous resolution show up as a distinct incident (Contract section
     26: "alert history MUST therefore preserve distinct incidents").
-    """
-    existing = await _get_unresolved_alert(session, battery_id, alert_type)
-    if existing is not None:
-        existing.severity = severity
-        existing.message = message
-        existing.measured_value = measured_value
-        existing.threshold_value = threshold_value
-        return
 
-    session.add(
-        Alert(
-            alert_id=uuid.uuid4(),
-            battery_id=battery_id,
-            timestamp=timestamp,
-            alert_type=alert_type,
-            severity=severity,
-            message=message,
-            measured_value=measured_value,
-            threshold_value=threshold_value,
-            resolved=False,
-            resolved_at=None,
-        )
+    This used to be a separate SELECT-then-decide (INSERT or UPDATE), which
+    is not atomic: two concurrent requests for the same battery_id +
+    alert_type (a burst of anomalous telemetry events in a batch, or this
+    rule-evaluation path racing the offline-detector's DEVICE_OFFLINE path,
+    both funneling through this one helper) could each see "no unresolved
+    alert yet" and both attempt an INSERT, and the second would violate the
+    partial unique index (`ux_alerts_battery_id_alert_type_unresolved`) and
+    raise instead of retaining. This is now a single atomic
+    `INSERT ... ON CONFLICT ... DO UPDATE` -- the same pattern already used
+    for the `battery_current_state` upsert in `telemetry_service.py` -- so
+    Postgres itself resolves the race: whichever transaction's row lands
+    first wins the insert, and the other becomes the UPDATE. The conflict
+    target names the partial unique index's columns *and* predicate
+    (`index_where`) so this only conflicts against an unresolved row of the
+    same incident, never a resolved (historical) one. The predicate is given
+    as raw SQL text (`resolved = false`), matching the exact expression form
+    used in the index's own definition (`app/models/alert.py`) -- Postgres
+    requires the ON CONFLICT predicate to structurally match the index
+    predicate to infer it as the conflict target, and `resolved = false`
+    (an equality op) is NOT considered a match for `resolved IS false` (a
+    boolean test), even though the two are semantically identical. Using
+    SQLAlchemy's `Alert.resolved.is_(False)` here compiles to `IS false` and
+    fails with "there is no unique or exclusion constraint matching the ON
+    CONFLICT specification" -- found by running the real test suite, not
+    caught by the sandbox's py_compile-only check.
+    """
+    insert_statement = pg_insert(Alert).values(
+        alert_id=uuid.uuid4(),
+        battery_id=battery_id,
+        timestamp=timestamp,
+        alert_type=alert_type,
+        severity=severity,
+        message=message,
+        measured_value=measured_value,
+        threshold_value=threshold_value,
+        resolved=False,
+        resolved_at=None,
     )
+    upsert_statement = insert_statement.on_conflict_do_update(
+        index_elements=["battery_id", "alert_type"],
+        index_where=text("resolved = false"),
+        set_={
+            "severity": insert_statement.excluded.severity,
+            "message": insert_statement.excluded.message,
+            "measured_value": insert_statement.excluded.measured_value,
+            "threshold_value": insert_statement.excluded.threshold_value,
+        },
+    )
+    await session.execute(upsert_statement)
 
 
 async def resolve_alert_if_active(

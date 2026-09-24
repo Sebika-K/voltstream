@@ -19,6 +19,7 @@ battery, so leftover rows from another test would change its answer.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -492,6 +493,43 @@ async def test_device_offline_created_then_resolved_end_to_end(client):
 # always returning 0.
 # --------------------------------------------------------------------------
 
+
+
+# --------------------------------------------------------------------------
+# Concurrency (Roadmap 6.4 load-test finding): create_or_retain_alert MUST
+# be a single atomic UPSERT, not a SELECT-then-decide. Under load, many
+# requests for the same battery_id + alert_type can race here -- a burst of
+# LOW_SOC-triggering events for one battery within a batch, or this rule
+# path racing the offline-detector's DEVICE_OFFLINE path, both funnel
+# through this one helper. With the old check-then-insert, two concurrent
+# callers could both see "no unresolved alert yet" and both try to INSERT,
+# and the second would violate the partial unique index
+# (`ux_alerts_battery_id_alert_type_unresolved`) instead of retaining.
+# --------------------------------------------------------------------------
+
+
+async def test_concurrent_low_soc_events_for_one_battery_retain_a_single_alert(client):
+    await _register("BAT-910060")
+    t0 = datetime.now(timezone.utc)
+
+    # Many concurrent requests, all tripping LOW_SOC for the SAME battery at
+    # once -- the exact shape of the race: every one of them will see no
+    # unresolved LOW_SOC alert yet if the create/retain check is not atomic.
+    responses = await asyncio.gather(
+        *(
+            client.post(
+                "/api/v1/telemetry",
+                json=_telemetry_payload("BAT-910060", timestamp=t0, state_of_charge=15.0),
+            )
+            for _ in range(20)
+        )
+    )
+
+    assert all(r.status_code in (200, 201) for r in responses), [r.status_code for r in responses]
+
+    alerts = await _get_all_alerts("BAT-910060", "LOW_SOC")
+    assert len(alerts) == 1
+    assert alerts[0].resolved is False
 
 async def test_fleet_summary_reflects_active_and_critical_alerts(client):
     await _register("BAT-910050")
