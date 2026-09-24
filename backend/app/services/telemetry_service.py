@@ -296,6 +296,31 @@ async def ingest_telemetry_batch(
             event for event in batch.events if event.event_id in inserted_ids
         ]
         latest_per_battery = await _upsert_current_state(session, newly_inserted_events)
+
+        # Roadmap 6.4, following the row-lock contention found in 6.3:
+        # commit telemetry + current-state on their own here, BEFORE
+        # evaluating anomaly rules, instead of holding one open transaction
+        # across both. `_upsert_current_state` above takes row locks on
+        # every battery_current_state row this batch touches; those locks
+        # are only released when this transaction commits. Rule evaluation
+        # below does up to ~4 sequential alert-lookup queries per battery in
+        # the batch (measured live via pg_stat_activity: multiple concurrent
+        # requests queued on `wait_event = transactionid` against this exact
+        # upsert, growing from ~7s to ~19s of wait across one 30-second load
+        # test). Committing here shrinks the lock-hold window from "however
+        # long the whole rule pass takes" down to "however long the upsert
+        # itself takes."
+        #
+        # Trade-off: telemetry storage and current-state are no longer
+        # atomic with alert evaluation. If rule evaluation fails after this
+        # commit, this batch's telemetry and current-state are already
+        # saved -- intentional, since losing real device data over a rule
+        # bug would be worse -- but alert evaluation for this batch could be
+        # left incomplete rather than rolled back with everything else. Not
+        # a permanent gap: the next reading for the same battery evaluates
+        # the same rules again against its own newest state.
+        await session.commit()
+
         await _evaluate_rules_and_resolve_offline(session, latest_per_battery, batteries_by_id)
 
     await session.commit()
