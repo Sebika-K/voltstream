@@ -382,5 +382,4 @@ alembic upgrade head
 
 ## What's next
 
-Recorded demo, published benchmark report, ML report.
 Prometheus/Grafana and Kafka remain deliberately deferred — both optional, revisited only if there's a measured reason to.
