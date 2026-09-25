@@ -21,6 +21,7 @@ from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
+from app.core.metrics import PREDICTIONS
 from app.db.session import get_db_session
 from app.schemas.battery import (
     BatteryCurrentStateResponse,
@@ -225,6 +226,7 @@ async def get_battery_prediction_endpoint(
             critical_soc_percent=settings.CRITICAL_SOC_PERCENT,
             min_discharge_power_kw=settings.MIN_DISCHARGE_POWER_KW,
         )
+        PREDICTIONS.labels(method=result.prediction_method or "unavailable").inc()
         return PredictionResponse(
             battery_id=battery_id,
             current_soc=None,
@@ -280,6 +282,7 @@ async def get_battery_prediction_endpoint(
         else None
     )
 
+    PREDICTIONS.labels(method=result.prediction_method or "unavailable").inc()
     return PredictionResponse(
         battery_id=battery_id,
         current_soc=current_state.state_of_charge,
