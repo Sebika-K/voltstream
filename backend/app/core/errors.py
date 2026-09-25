@@ -26,6 +26,8 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.exc import InterfaceError, OperationalError
 from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 
+from app.core.metrics import ERRORS
+
 logger = logging.getLogger(__name__)
 
 
@@ -56,6 +58,7 @@ async def api_error_handler(request: Request, exc: APIError) -> JSONResponse:
             "error": exc.message,
         },
     )
+    ERRORS.labels(code=exc.code).inc()
     return JSONResponse(
         status_code=exc.status_code,
         content={"error": {"code": exc.code, "message": exc.message}},
@@ -96,6 +99,7 @@ async def database_unavailable_handler(request: Request, exc: Exception) -> JSON
             "error": f"{type(exc).__name__}",
         },
     )
+    ERRORS.labels(code="DATABASE_UNAVAILABLE").inc()
     return JSONResponse(
         status_code=503,
         content={
