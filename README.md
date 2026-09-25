@@ -213,8 +213,11 @@ and a live load test reproducing the original failure with 0 errors afterward.
 
 ## ML Evaluation
 
-Real, measured comparison on a genuinely wide dataset (1,131,812 rows of
-accumulated telemetry), evaluated with actual MAE/RMSE rather than assumed:
+The full published report — including the two false starts (a misleadingly narrow
+first dataset, then a real `NaN` bug) that came before this result was trustworthy —
+is [`docs/ml/report.md`](docs/ml/report.md) (Roadmap 9.5). Real, measured comparison
+on a genuinely wide dataset (1,131,812 rows of accumulated telemetry), evaluated with
+actual MAE/RMSE rather than assumed:
 
 | Model                         | MAE (min) | RMSE (min)                                                 |
 | ----------------------------- | --------- | ---------------------------------------------------------- |
