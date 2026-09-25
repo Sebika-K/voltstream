@@ -8,7 +8,8 @@ Deliberately outside the ``/api/v1`` prefix used by product APIs: the TDD's API 
 from __future__ import annotations
 
 from fastapi import APIRouter
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from app.db.session import check_database_connection
 
@@ -42,3 +43,17 @@ async def ready() -> JSONResponse:
         status_code=503,
         content={"status": "not_ready", "database": "unavailable"},
     )
+
+
+@router.get("/metrics", summary="Prometheus-format application metrics")
+async def metrics() -> Response:
+    """Expose application metrics in Prometheus's text-exposition format
+    (Roadmap 7.1).
+
+    Bare and unversioned, same reasoning as ``/health`` and ``/ready``: this
+    is operational surface, not part of the versioned product API. Safe to
+    scrape as often as wanted -- it never touches the database itself; the
+    gauge-shaped metrics here are kept current by a periodic background
+    refresh (``app/services/metrics_refresher.py``), not computed per request.
+    """
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
