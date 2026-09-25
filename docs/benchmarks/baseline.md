@@ -124,7 +124,28 @@ One follow-up bug surfaced by actually running this against Postgres (not caught
 3. **The second race path confirmed live, not just in theory:** the offline detector fired mid-run (`Marked 200 battery(s) offline`) while load-test batches were still landing — the exact "rule-evaluation path racing the offline-detector's DEVICE_OFFLINE path through the same helper" scenario the fix targets — and completed without error.
 4. One unrelated `database_unavailable` ERROR appeared once in that run (a `TimeoutError` on the `/ready` healthcheck's own connection-pool probe, 20 users against the pool's 15 connections). This is the Phase 5 controlled-503-under-pool-exhaustion behavior (`core/errors.py`) working as designed, not the bug this item was verifying — flagged here as a separate thread for whenever Phase 6 performance work continues, not a 6.4 finding.
 
+### Before/After Benchmark
+
+The Roadmap's actual Done-When for 6.4 ("Optimization Experiments") asks for a documented before/after benchmark, not just a correctness check. So the exact same first four rungs from 6.2 -- 1/5/10/20 users, 5,000-battery pool, 30-second headless runs, simulator stopped -- were rerun against the fixed backend, unmodified from the 6.2 methodology. The database was not reset (consistent with 6.2's own approach), so if anything this is a harder test than the original: `telemetry` and `alerts` are both larger now than they were during 6.2.
+
+| Rung | Users | Requests | Failures | Median | Average | Min | Max | p95 | p99 | Throughput |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 (before) | 1 | 26 | 0 | 710ms | 717ms | 659ms | 777ms | 770ms | 780ms | ~89 events/sec |
+| 1 (after) | 1 | 60 | 0 | 220ms | 221ms | 164ms | 315ms | 280ms | 320ms | ~204 events/sec |
+| 2 (before) | 5 | 29 | 0 | 2.6s | 2.54s | 819ms | 5.2s | 5.2s | 5.2s | ~98 events/sec |
+| 2 (after) | 5 | 68 | 0 | 1.2s | 1.34s | 660ms | 3.2s | 2.7s | 3.2s | ~229 events/sec |
+| 3 (before) | 10 | 27 | 0 | 4.1s | 4.4s | 1.0s | 11.6s | 9.8s | 12.0s | ~92 events/sec |
+| 3 (after) | 10 | 52 | 0 | 2.3s | 2.96s | 831ms | 6.4s | 6.1s | 6.4s | ~176 events/sec |
+| 4 (before) | 20 | 17 | 0 | 7.2s | 6.9s | 1.4s | 13.4s | 13.0s | 13.0s | ~57 events/sec* |
+| 4 (after) | 20 | 44 | 0 | 4.8s | 5.11s | 1.6s | 11.8s | 10.0s | 12.0s | ~148 events/sec |
+
+\* Rung 4's "before" figure was already flagged in 6.2 as likely undercounted (a 30-second window cut off requests still in flight at that median latency), so the true improvement at 20 users is probably larger than this table shows.
+
+At every concurrency level, roughly 2-2.5x more requests completed in the same 30-second window, and median latency dropped 33-69%. The improvement holds (and if anything grows) at low concurrency -- 1 user went from 710ms to 220ms median -- which is the interesting part: at 1 user there is no lock contention to relieve, so the transaction-shortening change alone can't explain that gain. The other half of the fix does: the old `create_or_retain_alert` was a SELECT followed by a separate INSERT-or-UPDATE (two round trips to the database per alert type per event), while the new atomic `INSERT ... ON CONFLICT ... DO UPDATE` is one. With four rules evaluated per event, that's up to 8 statements collapsing to 4 -- a real reduction in work done per request, independent of concurrency, layered on top of the lock-contention fix that was 6.3's original hypothesis. Throughput does still taper off somewhat as concurrency rises (204 -> 148 events/sec from 1 to 20 users) rather than staying perfectly flat, meaning some contention-driven ceiling remains -- expected, since the current-state upsert itself still takes a row lock -- but it is far higher and far less punishing than the original flat ~57-98 events/sec ceiling that didn't move at all with concurrency.
+
+Raw Locust output for these four runs is in `loadtest/results/afterfix_*users_stats.csv` (gitignored, not committed -- see the original rungs' own CSVs for the "before" comparison point, generated the same way during 6.2).
+
 ### 6.4 status
 
-**Done.** The 6.3 root cause (lock held across alert-related work) is fixed, and fixing it surfaced and closed a second, previously-latent bug (`create_or_retain_alert`'s non-atomic check-then-insert) that shortening the lock window made much easier to trigger. Verified at three levels: unit/integration tests, a live load test at the same concurrency that originally produced the failures, and a live reproduction of the specific dual-path race (telemetry rules vs. offline detector) the fix targets.
+**Done.** The 6.3 root cause (lock held across alert-related work) is fixed, and fixing it surfaced and closed a second, previously-latent bug (`create_or_retain_alert`'s non-atomic check-then-insert) that shortening the lock window made much easier to trigger. Verified at three levels: unit/integration tests, a live load test at the same concurrency that originally produced the failures, and a live reproduction of the specific dual-path race (telemetry rules vs. offline detector) the fix targets. The Roadmap's own Done-When for this item -- a documented before/after benchmark showing a meaningful improvement -- is satisfied above: 2-2.5x more throughput and 33-69% lower median latency at every rung tested, against a database that had only grown larger since the original baseline.
 
