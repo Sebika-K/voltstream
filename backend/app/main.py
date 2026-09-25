@@ -29,6 +29,7 @@ from app.core.errors import (
 from app.core.logging_config import configure_logging
 from app.core.request_context import RequestContextMiddleware
 from app.services import model_registry
+from app.services.metrics_refresher import run_metrics_refresh_loop
 from app.services.offline_detector import run_offline_detection_loop
 from app.services.realtime_publisher import run_fleet_update_publisher
 
@@ -71,6 +72,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     tasks = [
         asyncio.create_task(run_fleet_update_publisher()),
         asyncio.create_task(run_offline_detection_loop()),
+        asyncio.create_task(run_metrics_refresh_loop()),
     ]
     try:
         yield

@@ -13,6 +13,12 @@ greenlet>=3.0,<4.0
 asyncpg>=0.30,<1.0
 alembic>=1.14,<2.0
 
+# Roadmap 7.1: application metrics exposed in Prometheus's text-exposition
+# format at GET /metrics (see app/core/metrics.py). Used as a client-side
+# metrics library regardless of whether Prometheus itself (Roadmap 7.2,
+# optional) ever scrapes it.
+prometheus-client>=0.21,<1.0
+
 # Roadmap 4.5 / Contract sections 45-46: loading and running the ML model
 # artifact `ml/training/persist_model.py` produces. `ml/` owns training;
 # this is only what the backend needs to deserialize a joblib-dumped

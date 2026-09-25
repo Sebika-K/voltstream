@@ -92,6 +92,14 @@ class Settings(BaseSettings):
     # of seconds, without re-scanning the table needlessly often.
     OFFLINE_DETECTION_INTERVAL_SECONDS: float = 5.0
 
+    # Roadmap 7.1: how often the background metrics-refresh loop
+    # (app/services/metrics_refresher.py) recomputes the two gauge-shaped
+    # metrics -- active batteries, active alerts. Same reasoning as
+    # OFFLINE_DETECTION_INTERVAL_SECONDS above: frequent enough to be useful
+    # on a dashboard, without re-scanning battery_current_state/alerts
+    # needlessly often.
+    METRICS_REFRESH_INTERVAL_SECONDS: float = 10.0
+
     # Roadmap 3.3 / Contract section 25: rule-based anomaly detection
     # thresholds. All "VoltStream simulation/monitoring defaults" per the
     # Contract's own framing (section 2) -- not real battery-safety limits.
