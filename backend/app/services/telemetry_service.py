@@ -32,6 +32,13 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import APIError
+from app.core.metrics import (
+    DATABASE_LATENCY_SECONDS,
+    INGESTION_LATENCY_SECONDS,
+    TELEMETRY_DUPLICATES,
+    TELEMETRY_INSERTED,
+    TELEMETRY_RECEIVED,
+)
 from app.models.battery import Battery
 from app.models.battery_current_state import BatteryCurrentState
 from app.models.telemetry import Telemetry
@@ -122,7 +129,11 @@ async def _upsert_current_state(
         },
         where=(BatteryCurrentState.last_seen <= upsert_statement.excluded.last_seen),
     )
+    db_started = time.perf_counter()
     await session.execute(upsert_statement)
+    DATABASE_LATENCY_SECONDS.labels(operation="current_state_upsert").observe(
+        time.perf_counter() - db_started
+    )
     return latest_per_battery
 
 
@@ -166,6 +177,9 @@ async def ingest_telemetry_event(session: AsyncSession, event: TelemetryEvent) -
 
     Raises `APIError` (404) if `event.battery_id` isn't a registered battery.
     """
+    started = time.perf_counter()
+    TELEMETRY_RECEIVED.inc()
+
     battery = await session.get(Battery, event.battery_id)
     if battery is None:
         raise APIError(
@@ -197,7 +211,11 @@ async def ingest_telemetry_event(session: AsyncSession, event: TelemetryEvent) -
         .on_conflict_do_nothing(index_elements=["event_id"])
         .returning(Telemetry.event_id)
     )
+    db_started = time.perf_counter()
     result = await session.execute(insert_statement)
+    DATABASE_LATENCY_SECONDS.labels(operation="telemetry_insert").observe(
+        time.perf_counter() - db_started
+    )
     created = result.scalar_one_or_none() is not None
 
     if created:
@@ -213,6 +231,8 @@ async def ingest_telemetry_event(session: AsyncSession, event: TelemetryEvent) -
         "telemetry_ingested" if created else "telemetry_duplicate_ignored",
         extra={"battery_id": event.battery_id, "event_id": str(event.event_id)},
     )
+    (TELEMETRY_INSERTED if created else TELEMETRY_DUPLICATES).inc()
+    INGESTION_LATENCY_SECONDS.labels(endpoint="single").observe(time.perf_counter() - started)
     return created
 
 
@@ -235,6 +255,7 @@ async def ingest_telemetry_batch(
     the offending event).
     """
     started = time.perf_counter()
+    TELEMETRY_RECEIVED.inc(len(batch.events))
     battery_ids = {event.battery_id for event in batch.events}
     # Full Battery rows, not just IDs -- Roadmap 3.3's voltage-anomaly rule
     # needs each battery's nominal_voltage, and fetching it here (once, for
@@ -283,7 +304,11 @@ async def ingest_telemetry_batch(
         .on_conflict_do_nothing(index_elements=["event_id"])
         .returning(Telemetry.event_id)
     )
+    db_started = time.perf_counter()
     result = await session.execute(insert_statement)
+    DATABASE_LATENCY_SECONDS.labels(operation="telemetry_insert").observe(
+        time.perf_counter() - db_started
+    )
     inserted_ids = set(result.scalars().all())
     inserted = len(inserted_ids)
 
@@ -326,6 +351,10 @@ async def ingest_telemetry_batch(
     await session.commit()
 
     duplicates = len(batch.events) - inserted
+    elapsed = time.perf_counter() - started
+    TELEMETRY_INSERTED.inc(inserted)
+    TELEMETRY_DUPLICATES.inc(duplicates)
+    INGESTION_LATENCY_SECONDS.labels(endpoint="batch").observe(elapsed)
     # Contract section 52's own example event. `duration_ms` here is the time spent
     # inside the ingestion service (checks + insert + commit); the request-level
     # `request_completed` line carries the total time including HTTP handling.
@@ -336,7 +365,7 @@ async def ingest_telemetry_batch(
             "inserted": inserted,
             "duplicates": duplicates,
             "battery_count": len(battery_ids),
-            "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+            "duration_ms": round(elapsed * 1000, 2),
         },
     )
     return inserted, duplicates
