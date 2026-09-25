@@ -185,8 +185,11 @@ The fastest way to see it live, once `docker compose up --build -d` is running:
 
 ## Performance Results
 
-Full methodology and the complete baseline ladder are in
-[`docs/benchmarks/baseline.md`](docs/benchmarks/baseline.md) — this section summarizes
+The full published benchmark report — workload, environment, error rate, and p95
+latency alongside the numbers below — is
+[`docs/benchmarks/report.md`](docs/benchmarks/report.md) (Roadmap 9.4). The complete
+investigation narrative, including how the bottleneck was found, is in
+[`docs/benchmarks/baseline.md`](docs/benchmarks/baseline.md). This section summarizes
 the headline result: a documented before/after optimization (Roadmap 6.4), closing a
 real race condition found under load.
 
