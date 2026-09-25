@@ -169,13 +169,19 @@ The fastest way to see it live, once `docker compose up --build -d` is running:
    the simulator's 100 devices report in, no refresh needed.
 2. Click into any battery for its detail page — live state, historical chart, and a
    depletion-time prediction if it's currently discharging.
-3. Set `FAULT_RATE` above `0.0` in `.env` and restart the simulator
-   (`docker compose up -d simulator`) to see anomaly alerts appear on the `/alerts` page
-   in real time as faulty devices report out-of-range readings.
+3. Trigger a real anomaly alert: grab a live `battery_id` from the dashboard and `POST`
+   one deliberately extreme reading straight to the ingestion endpoint (see
+   [`docs/demo-script.md`](docs/demo-script.md) for a ready-to-paste `curl` example) —
+   it crosses a real configured threshold (e.g. `LOW_SOC_CRITICAL_PERCENT`) and an alert
+   appears on `/alerts` within seconds. (Note: the simulator's `FAULT_RATE` setting
+   currently only labels a battery `FAULTY`; it doesn't yet inject abnormal readings, so
+   it won't produce a visible fault on its own.)
 4. `docker compose stop simulator` and watch the Offline count climb on the dashboard as
    devices stop reporting — then `docker compose start simulator` and watch them recover.
 
-A recorded walkthrough will be linked here once it exists.
+**Recorded walkthrough:** [watch the demo](https://github.com/user-attachments/assets/96b9f6db-e1c6-467a-a11a-2c82b8958d32)
+— fleet dashboard, a live-triggered alert, and the prediction panel, following
+[`docs/demo-script.md`](docs/demo-script.md).
 
 ## Performance Results
 
